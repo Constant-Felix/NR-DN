@@ -1,7 +1,7 @@
 output/
 exp/
 pymp-*
-qk*.py
+model/qk*.py
 ms*.py
 torchinductor_hyx
 all_spike/

@@ -838,13 +838,13 @@ LRA_S4_PRESETS: Dict[str, Dict[str, object]] = {
     "listops": {
         "n_layers": 8, #
         "d_model": 128, #
-        "d_state": 4,
+        "d_state": 64, #
         "dropout": 0.0,
         "norm": "batch",
         "prenorm": False,
         "l_max": 2048,
         "layer_lr": {"dt": None, "A": 0.001, "B": 0.001},
-        "n_ssm": 1,
+        "n_ssm": 128, #
         "decoder_mode": "pool",
     },
     "text": {
@@ -874,13 +874,13 @@ LRA_S4_PRESETS: Dict[str, Dict[str, object]] = {
     "aan": {
         "n_layers": 6,
         "d_model": 256,
-        "d_state": 4,
+        "d_state": 64, #
         "dropout": 0.0,
         "norm": "batch",
         "prenorm": True,
         "l_max": 4000,
         "layer_lr": {"dt": None, "A": 0.001, "B": 0.001},
-        "n_ssm": 1,
+        "n_ssm": 256, #
         "retrieval": True,
         "decoder_mode": "pool",
     },

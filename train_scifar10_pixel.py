@@ -720,7 +720,7 @@ def validate_device_compatibility(
             "an FFT checkpoint keeps its stored backends when resumed."
         )
 
-#  python train_scifar10_pixel.py --psn-exp-init --device cuda:0 --soma-type psn_integer_ssf --psn-order 4  --lr 0.005 --weight-decay 0.0005 --dropout 0.0      --neuron-lr 1e-3 --neuron-weight-decay 0
+#  python train_scifar10_pixel.py --psn-exp-init --device cuda:1 --lr 0.01 --weight-decay 0.01  --soma-type psn_integer_ssf    --dropout 0.0      --neuron-lr 1e-3 --neuron-weight-decay 0
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -729,7 +729,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--data-path", default="/data2/hyx/ViT-dend/data/cifar10", help="CIFAR-10 root")
-    parser.add_argument("--output-dir", default="./logs/pixel_cifar10_dend_soma")
+    parser.add_argument("--output-dir", default="/data3/hyx/logs/pixel_cifar10_dend_soma")
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--resume", default=None, help="checkpoint path")
     parser.add_argument("--eval-only", action="store_true")

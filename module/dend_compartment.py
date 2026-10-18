@@ -1791,13 +1791,13 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         branch_mod = torch.tanh(branch_mod)
 
         distal_gain = self._edge_branch_value(self.distal_gain).to(dtype=state.dtype, device=state.device)
-        residual_gain = self._edge_branch_value(self.distal_residual_gain).to(dtype=state.dtype, device=state.device)
+        #residual_gain = self._edge_branch_value(self.distal_residual_gain).to(dtype=state.dtype, device=state.device)
         branch_strength = self._edge_branch_value(self.branch_strength).to(dtype=state.dtype, device=state.device)
         distal_gain = self._view_edge_channel(distal_gain, trunk)
-        residual_gain = self._view_edge_channel(residual_gain, trunk)
+        #residual_gain = self._view_edge_channel(residual_gain, trunk)
         branch_strength = self._view_edge_channel(branch_strength, trunk)
 
-        y = branch_strength * (trunk + distal_gain * trunk * branch_mod) #+ residual_gain * branch_mod)
+        y = branch_strength * (trunk + distal_gain * trunk * branch_mod) #+ residual_gain * branch_mod)  #
 
         if self.store_branch_monitor:
             self._branch_mod_step = branch_mod.detach()

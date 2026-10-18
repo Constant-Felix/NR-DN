@@ -231,7 +231,7 @@ class RandomCutmix(torch.nn.Module):
         return s
 
 class CIFAR10Net(nn.Module):
-    def __init__(self, channels, class_num: int, T: int=32, P:int=-1,num_branches=4,compartments_per_branch=4,branch_degree=1):
+    def __init__(self, channels, class_num: int, T: int=32, P:int=-1,num_branches=8,compartments_per_branch=4,branch_degree=1):
         super().__init__()
         conv = []
         for i in range(2):
@@ -242,7 +242,7 @@ class CIFAR10Net(nn.Module):
                     in_channels = channels
                 conv.append(layer.Conv1d(in_channels, channels, kernel_size=3, padding=1, bias=False))
                 conv.append(layer.BatchNorm1d(channels))
-                #conv.append(SparseChannelPreservingTrunkDistalDendCompartment(channels,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean'))
+                conv.append(SparseChannelPreservingTrunkDistalDendCompartment(channels,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean'))
                 #conv.append(soma.AstroPSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True))
                 #conv.append(soma.AstroMaskedSlidingPSN(order=T,exp_init=True,astro_thre=0.4,astro_pool_kernel=5))
                 conv.append(soma.PSNIntergerSoma_ssf(psn_order=T//8,psn_exp_init=True,psn_backend='fft'))
@@ -257,7 +257,7 @@ class CIFAR10Net(nn.Module):
         self.fc = nn.Sequential(
             layer.Flatten(),
             layer.Linear(channels * 8, channels * 8 // 4),
-            #SparseChannelPreservingTrunkDistalDendCompartment(channels * 2,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean'),
+            SparseChannelPreservingTrunkDistalDendCompartment(channels * 2,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean'),
             #soma.AstroPSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True),
             #soma.AstroMaskedSlidingPSN(order=T,exp_init=True,astro_thre=0.4,astro_pool_kernel=5),
             #soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'),
@@ -274,7 +274,7 @@ class CIFAR10Net(nn.Module):
         x_seq = self.fc(self.conv(x_seq))  # [W, N, C]
         return x_seq.mean(0)
 
-# python train_seq.py -data-dir /data2/hyx/ViT-dend/data/cifar10 -amp -class-num 10 -channels 128  -warmup-epochs 0  -epochs 400 -opt adamw -lr 0.001   -wd 5e-4 -min-lr 0.00001   -resume logs/pt/None_e400_b128_adamw_lr0.001_c128_20260608-112508_amp_P32/checkpoint_latest.pth
+# python train_seq.py -data-dir /data2/hyx/ViT-dend/data/cifar10 -amp -class-num 10 -channels 128  -warmup-epochs 0  -epochs 400 -opt adamw -lr 0.001  -resume logs/pt/None_e400_b128_adamw_lr0.001_c128_20261016-060357_amp_P32/checkpoint_latest.pth
 
 from datetime import datetime
 def main():
@@ -287,7 +287,7 @@ def main():
     parser.add_argument('-j', default=4, type=int, metavar='N',
                         help='number of data loading workers (default: 4)')
     parser.add_argument('-data-dir', type=str, help='root dir of CIFAR10/100 dataset')
-    parser.add_argument('-out-dir', type=str, default='./logs', help='root dir for saving logs and checkpoint')
+    parser.add_argument('-out-dir', type=str, default='/data3/hyx/logs', help='root dir for saving logs and checkpoint')
     parser.add_argument('-resume', type=str, help='resume from the checkpoint path')
     parser.add_argument('-amp', action='store_true', help='automatic mixed precision training')
     parser.add_argument('-opt', type=str, help='use which optimizer. SDG or Adam')
