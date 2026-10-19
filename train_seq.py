@@ -243,8 +243,6 @@ class CIFAR10Net(nn.Module):
                 conv.append(layer.Conv1d(in_channels, channels, kernel_size=3, padding=1, bias=False))
                 conv.append(layer.BatchNorm1d(channels))
                 conv.append(SparseChannelPreservingTrunkDistalDendCompartment(channels,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean'))
-                #conv.append(soma.AstroPSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True))
-                #conv.append(soma.AstroMaskedSlidingPSN(order=T,exp_init=True,astro_thre=0.4,astro_pool_kernel=5))
                 conv.append(soma.PSNIntergerSoma_ssf(psn_order=T//8,psn_exp_init=True,psn_backend='fft'))
                 #conv.append(soma.ExponentialSoma_ssf())
                 #conv.append(soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'))
@@ -258,8 +256,6 @@ class CIFAR10Net(nn.Module):
             layer.Flatten(),
             layer.Linear(channels * 8, channels * 8 // 4),
             SparseChannelPreservingTrunkDistalDendCompartment(channels * 2,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean'),
-            #soma.AstroPSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True),
-            #soma.AstroMaskedSlidingPSN(order=T,exp_init=True,astro_thre=0.4,astro_pool_kernel=5),
             #soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'),
             soma.PSNIntergerSoma_ssf(psn_order=T//8,psn_exp_init=True,psn_backend='fft'),
             #soma.ExponentialSoma_ssf(),

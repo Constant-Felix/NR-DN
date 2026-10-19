@@ -36,9 +36,8 @@ from torchvision.transforms import autoaugment, transforms
 from torchvision.transforms.functional import InterpolationMode
 from module import dendrite,dend_compartment,soma,neuron,wiring
 from spikingjelly.activation_based import functional, surrogate, layer
-from spikingjelly.clock_driven.neuron import MultiStepParametricLIFNode, MultiStepLIFNode
-from module.dend_compartment import ChannelPreservingTrunkDistalDendCompartment,SparseChannelPreservingTrunkDistalDendCompartment,CoupledSparseChannelPreservingTrunkDistalDendCompartment
-from  module.soma import DecayPorderMaskedLinear
+from module.dend_compartment import SparseChannelPreservingTrunkDistalDendCompartment
+
 
 def setup_train_logging(log_file):
     logger = logging.getLogger()
@@ -73,64 +72,34 @@ class ff_SSC(nn.Module):
         layers += [nn.Linear(in_dim, hidden[0], bias=True),
                    #layer.BatchNorm1d(hidden[0]),
                    nn.Dropout(drop),
-                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[0],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'), #,branch_readout_mode="linear"),#,learn_edge_gain=False,learn_comp_gain=False),
-                   #nn.Identity(),
-                   #soma.AstroMaskedSlidingPSN(order=T,exp_init=True,astro_update_interval=1,astro_gain=0.2)]
+                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[0],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'), 
                    soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
-                   #soma.LIFNODE()]
-                   #soma.IFNode5PorderMaskD(T=T,P=250)]
-                   #soma.IntergerSoma_ssf(decay_input=False)]
                    #soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=4)]
-                   #soma.SelectiveAstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=25,astro_pool_kernel=5)]
-                   #soma.IFNode5(T=T)]
-                   #soma.AstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=5,astro_gain=0.2,astro_lambda=0.05,astro_trace_decay=0.8,astro_pool_kernel=5,astro_thre=0.8)] 
-                   #soma.AstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=5,astro_pool_kernel=9,astro_channel_pool_when_length1=True,astro_thre=0.2)]  #需要试astro_event_write=True
         layers += [nn.Linear(hidden[0], hidden[1], bias=True),
                    #layer.BatchNorm1d(hidden[1]),
                    nn.Dropout(drop),
-                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[1],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'),  #,branch_readout_mode="linear"), #,learn_edge_gain=False,learn_comp_gain=False),
-                   #nn.Identity(),
-                   #soma.AstroMaskedSlidingPSN(order=T,exp_init=True,astro_update_interval=1,astro_gain=0.2)]
+                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[1],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'),  
                    soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
-                   #soma.LIFNODE()]
-                   #soma.IFNode5PorderMaskD(T=T,P=250)]
-                   #soma.IntergerSoma_ssf(decay_input=False)]
                    #soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=4)]
-                   #soma.SelectiveAstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=25,astro_pool_kernel=5)]
-                   #soma.IFNode5(T=T)]
-                   #soma.AstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=5,astro_gain=0.2,astro_lambda=0.05,astro_trace_decay=0.8,astro_pool_kernel=5,astro_thre=0.8)] 
-                   #soma.AstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=5,astro_pool_kernel=9,astro_channel_pool_when_length1=True,astro_thre=0.2)]
         layers += [nn.Linear(hidden[1], hidden[2], bias=True),
                    #layer.BatchNorm1d(hidden[1]),
                    nn.Dropout(drop),
-                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[2],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'),  #,branch_readout_mode="linear"), #,learn_edge_gain=False,learn_comp_gain=False),
-                   #nn.Identity(),
-                   #soma.AstroMaskedSlidingPSN(order=T,exp_init=True,astro_update_interval=1,astro_gain=0.2)]
+                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[2],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'),  
                    soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
-                   #soma.LIFNODE()]
-                   #soma.IFNode5PorderMaskD(T=T,P=250)]
-                   #soma.IntergerSoma_ssf(decay_input=False)]
                    #soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=4)]
-                   #soma.SelectiveAstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=25,astro_pool_kernel=5)]
-                   #soma.IFNode5(T=T)]
-                   #soma.AstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=5,astro_gain=0.2,astro_lambda=0.05,astro_trace_decay=0.8,astro_pool_kernel=5,astro_thre=0.8)] 
-                   #soma.AstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=5,astro_pool_kernel=9,astro_channel_pool_when_length1=True,astro_thre=0.2)]
+
 
         layers += [nn.Linear(hidden[2], out_dim,bias=True)]
-                   #nn.Dropout(drop),  ##
-                   #soma.IFNode5(T=T)] ##
         self.features = nn.Sequential(*layers)
 
         functional.set_step_mode(self, 'm')
 
     def forward(self, x): # x [N, T, F]
         x = x.transpose(0, 1)
-        #x = x.unsqueeze(-1)
         assert x.dim() == 3, "dimension of x is not correct!"
 
-        #x = self.features(x).squeeze(-1)
         x = self.features(x)
-        return x.mean(0) ###
+        return x.mean(0) 
 
 
 def _expand_soma_skip(skip, num_layers, soma_type):
