@@ -7,7 +7,6 @@ ms*.py
 conf/
 dvs_utils/
 module/sps.py
-utils.py
 train_sequential_cifar.py
 train_dvs_qk.py
 loss.py
