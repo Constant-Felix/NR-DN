@@ -603,46 +603,39 @@ import torch.nn as nn
 
 class SSF_Quant(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, input, U):
+    def forward(ctx, input, L, U):
         ctx.save_for_backward(input)
+        ctx.L = L
         ctx.U = U
-        # 根据论文公式(17)：先截断，除以阈值，最后向下取整 (floor)
-        clipped_input = torch.clamp(input, min=-U, max=U)  ##
+        clipped_input = torch.clamp(input, min=L, max=U)  
         return torch.floor(clipped_input)
+        #return torch.trunc(clipped_input)
         #return clipped_input
 
     @staticmethod
     def backward(ctx, grad_output):
         input, = ctx.saved_tensors
+        L = ctx.L
         U = ctx.U
         grad_input = grad_output.clone()
-        
-        # 替代梯度 (STE): 在有效截断区间 [-U, U] 内放行梯度，超出则截断为 0
-        grad_input[input < -U] = 0  ##
+        grad_input[input < L] = 0  ##
         grad_input[input > U] = 0
-        return grad_input, None, None  # 对应 input, U, v_th 的梯度，常数不需要梯度
+        return grad_input, None, None  ##
 
 class SSF(nn.Module):
-    def __init__(self, U: int = 4):
+    def __init__(self, L: int = 0, U: int = 4):
         super().__init__()
         self.U = U
-        
-        # 【核心新增】引入可学习的平移参数 phi_p 和缩放参数 phi_s
-        # 初始化为不改变原分布的状态 (phi_p=0, phi_s=1)
+        self.L = L
         #self.phi_p = nn.Parameter(torch.tensor(0.0, dtype=torch.float32))
         #self.phi_s = nn.Parameter(torch.tensor(1.0, dtype=torch.float32))
 
     def forward(self, x):
-        # 1. 膜电位平移与缩放 (PyTorch 的 autograd 会自动计算 phi_p 和 phi_s 的梯度)
-        # 为防止缩放因子在训练中更新至负数或极小值导致除零错误，进行极小值限制
+
         #phi_s_clamped = torch.clamp(self.phi_s, min=1e-3)
         #x_norm = (x - self.phi_p) / phi_s_clamped
-        x_norm = x
-        # 2. 离散化与激活 (进入自定义的直通估计器)
-        spike = SSF_Quant.apply(x_norm, self.U)
-        #spike = x
-        #spike = torch.clamp(F.gelu(x),min=-self.U,max=self.U)
-        #spike = F.gelu(x)
+        #x_norm = x
+        spike = SSF_Quant.apply(x, self.L, self.U)
         return spike
 
 class IntergerSoma_ssf(neuron.BaseNode): # 假设基于 SpikingJelly 或类似框架的基类
@@ -844,7 +837,7 @@ class PSNIntergerSoma_ssf(neuron.BaseNode):
         psn_threshold_init: float = 0.0,
         tau: float = 2.,
         v_threshold: float = 1., v_reset: float = 0., detach_reset: bool = True,
-        decay_input: bool = True, step_mode='m', backend='torch', thre=4, ssf=True,
+        decay_input: bool = True, step_mode='m', backend='torch', L=0, thre=4, ssf=True,
         surrogate_function: Callable = surrogate.Sigmoid(),
     ):
         super().__init__(
@@ -870,7 +863,9 @@ class PSNIntergerSoma_ssf(neuron.BaseNode):
             weight = weight[0]
         self.psn_weight = nn.Parameter(weight)
         self.psn_threshold = nn.Parameter(torch.as_tensor(psn_threshold_init, dtype=torch.float32))
-        self.qtrick = SSF(U=thre) if ssf==True else nn.GELU()
+        self.surrogate_function = surrogate_function
+        self.thre = thre
+        self.qtrick = SSF(L=L, U=thre) if ssf==True else nn.GELU()
 
     def gen_gemm_weight(self, T: int, device=None, dtype=None):
         if device is None:
@@ -912,7 +907,10 @@ class PSNIntergerSoma_ssf(neuron.BaseNode):
     def multi_step_forward(self, x: torch.Tensor):
         mem_seq = self.psn_membrane_forward(x)
         #mem_seq = x
-        output = self.qtrick(mem_seq)
+        if self.thre == 1:
+            output = self.surrogate_function(mem_seq - self.thre)
+        else:    
+            output = self.qtrick(mem_seq)
         self.v = mem_seq[-1].detach()
         self.firing_rate = output.float().mean()
         return output

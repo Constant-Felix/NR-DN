@@ -720,7 +720,7 @@ def validate_device_compatibility(
             "an FFT checkpoint keeps its stored backends when resumed."
         )
 
-#  python train_scifar10_pixel.py --psn-exp-init --device cuda:1 --lr 0.01 --weight-decay 0.01  --soma-type psn_integer_ssf    --dropout 0.0      --neuron-lr 1e-3 --neuron-weight-decay 0
+#  python train_scifar10_pixel.py --psn-exp-init --device cuda:3 --lr 0.01 --weight-decay 0.01  --soma-type psn_integer_ssf  --resume  logs/pixel_cifar10_dend_soma/masked_sliding_psn_seed1111_20260730-100804/checkpoint_best.pt --eval-only            --dropout 0.0      --neuron-lr 1e-3 --neuron-weight-decay 0
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -898,7 +898,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     logger = configure_logging(run_dir)
     checkpoint_data: Optional[Dict[str, Any]] = None
     if args.resume:
-        checkpoint_data = torch.load(args.resume, map_location="cpu")
+        checkpoint_data = torch.load(args.resume, map_location="cpu",weights_only=False)
 
     if checkpoint_data is not None and {
         "model_config",

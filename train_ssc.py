@@ -76,11 +76,11 @@ class ff_SSC(nn.Module):
                    SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[0],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'), #,branch_readout_mode="linear"),#,learn_edge_gain=False,learn_comp_gain=False),
                    #nn.Identity(),
                    #soma.AstroMaskedSlidingPSN(order=T,exp_init=True,astro_update_interval=1,astro_gain=0.2)]
-                   #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
+                   soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
                    #soma.LIFNODE()]
                    #soma.IFNode5PorderMaskD(T=T,P=250)]
                    #soma.IntergerSoma_ssf(decay_input=False)]
-                   soma.PSNIntergerSoma_ssf(psn_order=4,psn_exp_init=True,thre=2)]
+                   #soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=4)]
                    #soma.SelectiveAstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=25,astro_pool_kernel=5)]
                    #soma.IFNode5(T=T)]
                    #soma.AstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=5,astro_gain=0.2,astro_lambda=0.05,astro_trace_decay=0.8,astro_pool_kernel=5,astro_thre=0.8)] 
@@ -91,11 +91,11 @@ class ff_SSC(nn.Module):
                    SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[1],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'),  #,branch_readout_mode="linear"), #,learn_edge_gain=False,learn_comp_gain=False),
                    #nn.Identity(),
                    #soma.AstroMaskedSlidingPSN(order=T,exp_init=True,astro_update_interval=1,astro_gain=0.2)]
-                   #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
+                   soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
                    #soma.LIFNODE()]
                    #soma.IFNode5PorderMaskD(T=T,P=250)]
                    #soma.IntergerSoma_ssf(decay_input=False)]
-                   soma.PSNIntergerSoma_ssf(psn_order=4,psn_exp_init=True,thre=2)]
+                   #soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=4)]
                    #soma.SelectiveAstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=25,astro_pool_kernel=5)]
                    #soma.IFNode5(T=T)]
                    #soma.AstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=5,astro_gain=0.2,astro_lambda=0.05,astro_trace_decay=0.8,astro_pool_kernel=5,astro_thre=0.8)] 
@@ -106,11 +106,11 @@ class ff_SSC(nn.Module):
                    SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[2],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'),  #,branch_readout_mode="linear"), #,learn_edge_gain=False,learn_comp_gain=False),
                    #nn.Identity(),
                    #soma.AstroMaskedSlidingPSN(order=T,exp_init=True,astro_update_interval=1,astro_gain=0.2)]
-                   #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
+                   soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
                    #soma.LIFNODE()]
                    #soma.IFNode5PorderMaskD(T=T,P=250)]
                    #soma.IntergerSoma_ssf(decay_input=False)]
-                   soma.PSNIntergerSoma_ssf(psn_order=4,psn_exp_init=True,thre=2)]
+                   #soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=4)]
                    #soma.SelectiveAstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=25,astro_pool_kernel=5)]
                    #soma.IFNode5(T=T)]
                    #soma.AstroPSNIntergerSoma_ssf(psn_order=T,astro_update_interval=5,astro_gain=0.2,astro_lambda=0.05,astro_trace_decay=0.8,astro_pool_kernel=5,astro_thre=0.8)] 
@@ -547,7 +547,7 @@ def getData(root, dataset):
     return (x_train, y_train), (x_test, y_test)
 
 
-# python train_ssc.py --task SSC --device cuda:2 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1       --epochs 400 --workers 16 --cos   --optim sgd    --lr 0.1
+# python train_ssc.py --task SSC --device cuda:6 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1       --epochs 400 --workers 16 --cos   --optim sgd    --lr 0.1
 # python train_ssc.py --task SSC --device cuda:6 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1
 # python train_ssc.py --task SHD --device cuda:1 --lr 0.005 --data-root /data/hyx/ViT-dend/data/shd/data_shd --wd 5e-4 --cos
 
@@ -652,7 +652,7 @@ if not 0.0 < args.asrc_de_tau <= 1.0:
 if args.asrc_lr_skip <= 0.0:
     raise ValueError("--asrc-lr-skip must be positive")
 if args.results_dir == '':
-    args.results_dir = './exp/'+args.task+'ff'+'-' + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    args.results_dir = '/data3/hyx/NR-DN/exp/'+args.task+'ff'+'-' + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
 Path(args.results_dir).mkdir(parents=True, exist_ok=True)
 logger = setup_train_logging(os.path.join(args.results_dir, "log-" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + ".txt"))

@@ -1264,10 +1264,11 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         self.branch_strength = nn.Parameter(torch.ones(self.num_branches))
         # Physical-space readout: C starts at the terminal compartment, while
         # the branch-level direct feedthrough D starts disabled.
-        linear_comp_readout = torch.zeros(self.num_branches, self.compartments_per_branch)
-        linear_comp_readout[:, -1] = 1.0
-        self.linear_comp_readout = nn.Parameter(linear_comp_readout)
-        self.linear_input_readout = nn.Parameter(torch.zeros(self.num_branches))
+        if self.branch_readout_mode == "linear":
+            linear_comp_readout = torch.zeros(self.num_branches, self.compartments_per_branch)
+            linear_comp_readout[:, -1] = 1.0
+            self.linear_comp_readout = nn.Parameter(linear_comp_readout)
+            self.linear_input_readout = nn.Parameter(torch.zeros(self.num_branches,self.compartments_per_branch)) #
         self.input_residual_scale = nn.Parameter(torch.tensor(float(input_residual_init)))
         self.output_scale = nn.Parameter(torch.tensor(1.0))
 
@@ -1776,28 +1777,28 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         trunk = state[:, :, :, 0, ...]
         distal = state[:, :, :, 1:, ...]
         delta = distal - trunk.unsqueeze(3)
-        #delta_norm = self._normalize_distal_delta(delta)
+        delta_norm = self._normalize_distal_delta(delta)
 
         alpha = F.softplus(self._edge_branch_value(self.distal_gate_alpha).to(dtype=state.dtype, device=state.device))
         threshold = self._edge_branch_value(self.distal_gate_threshold.abs()).to(dtype=state.dtype, device=state.device)
-        alpha = self._view_edge_distal(alpha, delta)
-        threshold = self._view_edge_distal(threshold, delta)
-        distal_gate = torch.sigmoid(alpha * delta.abs() - threshold)
+        alpha = self._view_edge_distal(alpha, delta_norm)
+        threshold = self._view_edge_distal(threshold, delta_norm)
+        distal_gate = torch.sigmoid(alpha * delta_norm.abs() - threshold)
 
         mix = torch.softmax(self.distal_mix_logits, dim=-1)
         mix = self._edge_branch_value(mix.to(dtype=state.dtype, device=state.device))
-        mix = self._view_edge_distal(mix, delta)
-        branch_mod = (mix * distal_gate * torch.tanh(delta)).sum(dim=3)
+        mix = self._view_edge_distal(mix, delta_norm)
+        branch_mod = (mix * distal_gate * torch.tanh(delta_norm)).sum(dim=3)
         branch_mod = torch.tanh(branch_mod)
 
         distal_gain = self._edge_branch_value(self.distal_gain).to(dtype=state.dtype, device=state.device)
-        #residual_gain = self._edge_branch_value(self.distal_residual_gain).to(dtype=state.dtype, device=state.device)
+        residual_gain = self._edge_branch_value(self.distal_residual_gain).to(dtype=state.dtype, device=state.device)
         branch_strength = self._edge_branch_value(self.branch_strength).to(dtype=state.dtype, device=state.device)
         distal_gain = self._view_edge_channel(distal_gain, trunk)
-        #residual_gain = self._view_edge_channel(residual_gain, trunk)
+        residual_gain = self._view_edge_channel(residual_gain, trunk)
         branch_strength = self._view_edge_channel(branch_strength, trunk)
 
-        y = branch_strength * (trunk + distal_gain * trunk * branch_mod) #+ residual_gain * branch_mod)  #
+        y = branch_strength * (trunk + distal_gain * trunk * branch_mod + residual_gain * branch_mod)
 
         if self.store_branch_monitor:
             self._branch_mod_step = branch_mod.detach()
