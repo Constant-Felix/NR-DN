@@ -22,7 +22,7 @@ from torch.utils.data.dataloader import default_collate
 from torchvision.transforms import autoaugment, transforms
 from torchvision.transforms.functional import InterpolationMode
 from module import dendrite,dend_compartment,soma,neuron,wiring
-from module.dend_compartment import ChannelPreservingTrunkDistalDendCompartment,SparseChannelPreservingTrunkDistalDendCompartment
+from module.dend_compartment import SparseChannelPreservingTrunkDistalDendCompartment
 
 
 
@@ -244,7 +244,7 @@ class CIFAR10Net(nn.Module):
                 conv.append(layer.BatchNorm1d(channels))
                 conv.append(SparseChannelPreservingTrunkDistalDendCompartment(channels,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean'))
                 conv.append(soma.PSNIntergerSoma_ssf(psn_order=T//8,L=L,thre=thre,psn_exp_init=True,psn_backend='fft'))
-                #conv.append(soma.ExponentialSoma_ssf())
+                #conv.append(soma.ExponentialSoma_ssf(L=L,thre=thre))
                 #conv.append(soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'))
 
             conv.append(layer.AvgPool1d(2))
@@ -258,7 +258,7 @@ class CIFAR10Net(nn.Module):
             SparseChannelPreservingTrunkDistalDendCompartment(channels * 2,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean'),
             #soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'),
             soma.PSNIntergerSoma_ssf(psn_order=T//8,L=L,thre=thre,psn_exp_init=True,psn_backend='fft'),
-            #soma.ExponentialSoma_ssf(),
+            #soma.ExponentialSoma_ssf(L=L,thre=thre),
             layer.Linear(channels * 8 // 4, class_num),
         )
 

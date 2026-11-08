@@ -221,6 +221,18 @@ class SSF(nn.Module):
         spike = SSF_Quant.apply(x, self.L, self.U)
         return spike
 
+def _bounded_integer_fire(mem_seq, L, U, quantizer, surrogate_function):
+    """Bounded integer firing shared by the integer somas.
+
+    ``(L, U) == (0, 1)`` keeps binary spikes with the sigmoid surrogate gradient
+    (the SPSN-equivalent setting); every other range uses ``quantizer``, i.e. the
+    SSF floor(clip(v, L, U)) with the straight-through estimator inside [L, U].
+    """
+    if L == 0 and U == 1:
+        return surrogate_function(mem_seq - U)
+    return quantizer(mem_seq)
+
+
 class PSNIntergerSoma_ssf(neuron.BaseNode):
     """SSF integer soma with a PSN-style causal temporal membrane kernel.
 
@@ -264,6 +276,9 @@ class PSNIntergerSoma_ssf(neuron.BaseNode):
         self.psn_weight = nn.Parameter(weight)
         self.psn_threshold = nn.Parameter(torch.as_tensor(psn_threshold_init, dtype=torch.float32))
         self.surrogate_function = surrogate_function
+        if ssf and L >= thre:
+            raise ValueError(f"SSF requires L < U, got L={L}, U={thre}")
+        self.L = L
         self.thre = thre
         self.qtrick = SSF(L=L, U=thre) if ssf==True else nn.GELU()
 
@@ -307,10 +322,9 @@ class PSNIntergerSoma_ssf(neuron.BaseNode):
     def multi_step_forward(self, x: torch.Tensor):
         mem_seq = self.psn_membrane_forward(x)
         #mem_seq = x
-        if self.thre == 1:
-            output = self.surrogate_function(mem_seq - self.thre)
-        else:    
-            output = self.qtrick(mem_seq)
+        output = _bounded_integer_fire(
+            mem_seq, self.L, self.thre, self.qtrick, self.surrogate_function
+        )
         self.v = mem_seq[-1].detach()
         self.firing_rate = output.float().mean()
         return output
@@ -324,6 +338,9 @@ class ExponentialSoma_ssf(neuron.BaseNode):
     ``decay`` is constrained to (0, 1). The default kernel is ``2**(-lag)``,
     matching an exponentially initialized PSN soma with ``psn_order=T``.
 
+    Firing follows ``_bounded_integer_fire`` with range ``[L, thre]``, exactly
+    as in ``PSNIntergerSoma_ssf``.
+
     Each multi-step call starts from zero integration state and uses all T
     causal lags, with no spike-dependent reset or finite sliding-window cutoff.
     Only whole-sequence (``step_mode='m'``) execution is supported. ``self.v``
@@ -336,7 +353,9 @@ class ExponentialSoma_ssf(neuron.BaseNode):
         gain_init: float = 1.0,
         bias_init: float = 0.0,
         kernel_backend: str = "fft",
+        L: int = 0,
         thre: int = 4,
+        surrogate_function: Callable = surrogate.Sigmoid(),
         step_mode: str = "m",
         backend: str = "torch",
         store_v_seq: bool = False,
@@ -349,9 +368,12 @@ class ExponentialSoma_ssf(neuron.BaseNode):
             raise ValueError("kernel_backend must be 'fft', 'conv', or 'gemm'")
         if isinstance(thre, bool) or not isinstance(thre, int) or thre <= 0:
             raise ValueError("thre must be a positive integer")
+        if isinstance(L, bool) or not isinstance(L, int) or L >= thre:
+            raise ValueError("L must be an integer smaller than thre")
         if step_mode != "m":
             raise ValueError("ExponentialSoma_ssf supports only step_mode='m'")
         super().__init__(
+            surrogate_function=surrogate_function,
             step_mode=step_mode, backend=backend, store_v_seq=store_v_seq,
         )
         self.kernel_backend = kernel_backend
@@ -360,7 +382,10 @@ class ExponentialSoma_ssf(neuron.BaseNode):
         ))
         self.gain = nn.Parameter(torch.tensor(gain_init, dtype=torch.float32))
         self.bias = nn.Parameter(torch.tensor(bias_init, dtype=torch.float32))
-        self.qtrick = SSF(U=thre)
+        self.L = L
+        self.thre = thre
+        self.surrogate_function = surrogate_function
+        self.qtrick = SSF(L=L, U=thre)
 
     def exponential_kernel(self, length: int, device=None, dtype=None):
         """Return lag-ordered weights, with the current-input tap first."""
@@ -406,7 +431,9 @@ class ExponentialSoma_ssf(neuron.BaseNode):
 
     def multi_step_forward(self, x: torch.Tensor):
         mem_seq = self.exponential_membrane_forward(x)
-        output = self.qtrick(mem_seq)
+        output = _bounded_integer_fire(
+            mem_seq, self.L, self.thre, self.qtrick, self.surrogate_function
+        )
         self.v = mem_seq[-1].detach()
         if self.store_v_seq:
             self.v_seq = mem_seq
