@@ -105,12 +105,13 @@ class TiedDropout(nn.Module):
 
 @dataclass(frozen=True)
 class DendSomaConfig:
-    soma_type: str = "masked_sliding_psn"
+    soma_type: str = "psn_integer_ssf"
     psn_order: int = CIFAR10_SEQUENCE_LENGTH
     psn_backend: str = "fft"
-    psn_exp_init: bool = False
+    psn_exp_init: bool = True
     integer_psn_bias: float = 0.0
-    ssf_thre: int = 4
+    ssf_L: int = 0
+    ssf_thre: int = 1
     num_branches: int = 4
     compartments_per_branch: int = 2
     branch_degree: int = 1
@@ -240,6 +241,7 @@ class DendSomaTemporalLayer(nn.Module):
                 psn_exp_init=config.psn_exp_init,
                 psn_backend=config.psn_backend,
                 psn_threshold_init=config.integer_psn_bias,
+                L=config.ssf_L,
                 thre=config.ssf_thre,
                 step_mode="m",
             )
@@ -729,7 +731,7 @@ def build_parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--data-path", default="/data2/hyx/ViT-dend/data/cifar10", help="CIFAR-10 root")
-    parser.add_argument("--output-dir", default="/data3/hyx/logs/pixel_cifar10_dend_soma")
+    parser.add_argument("--output-dir", default="/data3/hyx/NR-DN/exp/pixel_cifar10_dend_soma")
     parser.add_argument("--run-name", default=None)
     parser.add_argument("--resume", default=None, help="checkpoint path")
     parser.add_argument("--eval-only", action="store_true")

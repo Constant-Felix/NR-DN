@@ -559,7 +559,7 @@ def save_checkpoint(state: dict, output_dir: Path, is_best: bool) -> None:
         torch.save(state, output_dir / "model_best.pth.tar")
 
 # python train_lra_s4.py --task imdb --device cuda:0 --soma-lr 0.001 --dend-lr 0.001 --soma-type psn_integer_ssf --resume /data2/hyx/ViT-dend2/exp/lra-new-cifar-dend_soma-gelu-2026-09-23-04-02-51/checkpoint.pth.tar --output-dir /data2/hyx/ViT-dend2/exp/lra-new-cifar-dend_soma-gelu-2026-09-23-04-02-51
-# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --standalone --nproc-per-node=8  train_lra_s4.py --task pathx  --soma-lr 0.001 --dend-lr 0.001 --soma-type psn_integer_ssf --resume /data2/hyx/ViT-dend2/exp/lra-new-pathx-dend_soma-gelu-2026-09-20-03-52-24/checkpoint.pth.tar --output-dir /data2/hyx/ViT-dend2/exp/lra-new-pathx-dend_soma-gelu-2026-09-20-03-52-24
+# CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --standalone --nproc-per-node=8  train_lra_s4.py --task pathx  --soma-lr 0.001 --dend-lr 0.001 --soma-type psn_integer_ssf --soma-ssf-L 0  --soma-ssf-thre 4       --resume /data2/hyx/ViT-dend2/exp/lra-new-pathx-dend_soma-gelu-2026-09-20-03-52-24/checkpoint.pth.tar --output-dir /data2/hyx/ViT-dend2/exp/lra-new-pathx-dend_soma-gelu-2026-09-20-03-52-24
 # CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --standalone --nproc-per-node=4 train_lra_s4.py --task aan --device cuda --soma-lr 0.001 --dend-lr 0.001 --soma-type psn_integer_ssf --recipe s4_v3 --batch-size 16      --lr 0.01   --dend-compartments 2
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -766,7 +766,13 @@ def parse_args():
         "--soma-ssf-thre",
         type=int,
         default=4,
-        help="Signed SSF clipping level for psn_integer_ssf.",
+        help="Signed SSF upper level for psn_integer_ssf.",
+    )
+    parser.add_argument(
+        "--soma-ssf-L",
+        type=int,
+        default=0,
+        help="Signed SSF lower level for psn_integer_ssf.",
     )
     parser.add_argument(
         "--dend-soma-activation-checkpoint",
@@ -974,6 +980,7 @@ def main() -> None:
         "dend_soma_psn_exp_init": args.soma_psn_exp_init,
         "dend_soma_psn_threshold_init": args.soma_psn_threshold_init,
         "dend_soma_ssf_thre": args.soma_ssf_thre,
+        "dend_soma_ssf_L": args.soma_ssf_L,
         "dend_soma_activation_checkpoint": args.dend_soma_activation_checkpoint,
     }
 
@@ -1079,7 +1086,7 @@ def main() -> None:
             if args.recipe == "mmdend_s4"
             else f"lra-{args.recipe}-{task_key}-{activation_label}-{stamp}"
         )
-        output_dir_value = str(Path("exp") / run_name)
+        output_dir_value = str(Path("/data3/hyx/NR-DN/exp") / run_name)
     if distributed:
         output_dir_values = [output_dir_value]
         dist.broadcast_object_list(output_dir_values, src=0)
@@ -1310,3 +1317,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

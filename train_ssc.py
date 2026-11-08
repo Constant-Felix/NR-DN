@@ -73,20 +73,20 @@ class ff_SSC(nn.Module):
                    #layer.BatchNorm1d(hidden[0]),
                    nn.Dropout(drop),
                    SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[0],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'), 
-                   soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
-                   #soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=4)]
+                   #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
+                   soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=1)]
         layers += [nn.Linear(hidden[0], hidden[1], bias=True),
                    #layer.BatchNorm1d(hidden[1]),
                    nn.Dropout(drop),
                    SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[1],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'),  
-                   soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
-                   #soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=4)]
+                   #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
+                   soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=1)]
         layers += [nn.Linear(hidden[1], hidden[2], bias=True),
                    #layer.BatchNorm1d(hidden[1]),
                    nn.Dropout(drop),
                    SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[2],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'),  
-                   soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
-                   #soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=4)]
+                   #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
+                   soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=1)]
 
 
         layers += [nn.Linear(hidden[2], out_dim,bias=True)]
@@ -516,8 +516,71 @@ def getData(root, dataset):
     return (x_train, y_train), (x_test, y_test)
 
 
+def resolve_eval_checkpoint(path):
+    """Accept a file written by save_checkpoint() or the results dir holding it."""
+    path = os.path.expanduser(path)
+    if os.path.isdir(path):
+        path = os.path.join(path, 'model_best.pth.tar')
+    if not os.path.isfile(path):
+        raise FileNotFoundError(f"checkpoint not found: {path}")
+    return path
+
+
+def check_eval_args_against_training(args):
+    """Fail early if the CLI would rebuild a different ff_SSC than the checkpoint's."""
+    train_args_path = os.path.join(os.path.dirname(args.checkpoint), 'args.json')
+    if not os.path.isfile(train_args_path):
+        return
+    with open(train_args_path) as fid:
+        train_args = json.load(fid)
+    flags = {
+        'task': '--task',
+        'ssc_preprocess': '--ssc-preprocess',
+        'ssc_soma': '--ssc-soma',
+        'ssc_n_bins': '--ssc-n-bins',
+    }
+    mismatched = []
+    for key, flag in flags.items():
+        if key not in train_args:
+            continue
+        trained, given = train_args[key], getattr(args, key)
+        if key == 'task':
+            trained, given = str(trained).upper(), str(given).upper()
+        if trained != given:
+            mismatched.append(f"{flag} {train_args[key]} (got {getattr(args, key)})")
+    if mismatched:
+        raise ValueError(
+            "checkpoint was trained with " + ", ".join(mismatched)
+            + f"; see {train_args_path}"
+        )
+
+
+def evaluate_checkpoint(model, test_loader, args, gpu):
+    """Load a checkpoint written by save_checkpoint() and run validate() once."""
+    # save_checkpoint() stores best_acc as an argparse.Namespace, which the
+    # weights_only=True default of torch>=2.6 refuses; these files come from this script.
+    checkpoint = torch.load(args.checkpoint, map_location=gpu, weights_only=False)
+    model.load_state_dict(checkpoint['state_dict'])
+    logging.info('eval-only: loaded {} (saved after {} epochs)'.format(
+        args.checkpoint, checkpoint.get('epoch')))
+
+    criterion = nn.CrossEntropyLoss().to(gpu)
+    if args.print_freq > len(test_loader):
+        args.print_freq = max(1, math.ceil(len(test_loader) / 2))
+    test_loader.reset()
+    acc1, acc5, test_loss = validate(test_loader, model, criterion, args, gpu=gpu)
+    logging.info('eval-only: test_loss = {:.4f}, test_acc = {:.4f}, test_acc5 = {:.4f}'.format(
+        test_loss, scalar_value(acc1), scalar_value(acc5)))
+    best_acc = checkpoint.get('best_acc')
+    if best_acc is not None:
+        logging.info('eval-only: best_test_acc recorded during training = {:.4f}'.format(
+            scalar_value(best_acc.top1)))
+    return acc1, acc5, test_loss
+
+
 # python train_ssc.py --task SSC --device cuda:6 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1       --epochs 400 --workers 16 --cos   --optim sgd    --lr 0.1
 # python train_ssc.py --task SSC --device cuda:6 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1
+# python train_ssc.py --eval-only --checkpoint <results_dir>/model_best.pth.tar --task SSC --ssc-preprocess asrc --ssc-soma psn --ssc-n-bins 1 --device cuda:6
 # python train_ssc.py --task SHD --device cuda:1 --lr 0.005 --data-root /data/hyx/ViT-dend/data/shd/data_shd --wd 5e-4 --cos
 
 parser = argparse.ArgumentParser(description='Sequential SHD/SSC')
@@ -572,6 +635,12 @@ parser.add_argument('--asrc-lr-skip', '--lr-skip', dest='asrc_lr_skip',
                     help='learning rate for ASRC skip logits (no weight decay)')
 parser.add_argument('--device', default=None, type=str, help="device, e.g. 'cuda', 'cuda:5', or 'cpu'")
 parser.add_argument('--no-pin-memory', action='store_true', default=False, help='disable DataLoader pinned memory')
+parser.add_argument('--eval-only', action='store_true', default=False,
+                    help='skip training: load --checkpoint and evaluate it once on the SSC test split '
+                         '(supports --task SSC --ssc-preprocess asrc --ssc-soma psn only)')
+parser.add_argument('--checkpoint', default='', type=str, metavar='PATH',
+                    help='checkpoint.pth.tar / model_best.pth.tar saved by this script, or its '
+                         'results directory (then model_best.pth.tar is used)')
 
 args = parser.parse_args()
 paper_aligned_soma = (
@@ -620,11 +689,25 @@ if not 0.0 < args.asrc_de_tau <= 1.0:
     raise ValueError("--de-tau must be in (0, 1]")
 if args.asrc_lr_skip <= 0.0:
     raise ValueError("--asrc-lr-skip must be positive")
+log_prefix = "log-"
+if args.eval_only:
+    if not args.checkpoint:
+        raise ValueError("--eval-only requires --checkpoint")
+    if args.task.upper() != 'SSC' or args.ssc_preprocess != 'asrc' or args.ssc_soma != 'psn':
+        raise ValueError(
+            "--eval-only supports only --task SSC --ssc-preprocess asrc --ssc-soma psn"
+        )
+    args.checkpoint = resolve_eval_checkpoint(args.checkpoint)
+    check_eval_args_against_training(args)
+    if args.results_dir == '':
+        # Write the eval log next to the checkpoint instead of starting a new exp/ run.
+        args.results_dir = os.path.dirname(args.checkpoint)
+    log_prefix = "eval-"
 if args.results_dir == '':
     args.results_dir = '/data3/hyx/NR-DN/exp/'+args.task+'ff'+'-' + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
 Path(args.results_dir).mkdir(parents=True, exist_ok=True)
-logger = setup_train_logging(os.path.join(args.results_dir, "log-" + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + ".txt"))
+logger = setup_train_logging(os.path.join(args.results_dir, log_prefix + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + ".txt"))
 
 if args.device is not None:
     gpu = torch.device(args.device)
@@ -707,6 +790,10 @@ else:
         ).to(gpu)
 n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"number of params: {n_parameters}")
+if args.eval_only:
+    logging.info(str(args))
+    evaluate_checkpoint(model, test_loader, args, gpu)
+    sys.exit(0)
 asrc_soma_modules = [
     module for module in model.modules()
     if isinstance(module, soma.adskip_RecurrentContainer)

@@ -63,6 +63,7 @@ class S4LRAConfig:
     dend_soma_psn_exp_init: bool = False
     dend_soma_psn_threshold_init: float = 0.0
     dend_soma_ssf_thre: int = 4
+    dend_soma_ssf_L: int = 0
     dend_soma_activation_checkpoint: bool = True
     backend: str = "official"
 
@@ -268,6 +269,7 @@ class DendSomaS4Activation(nn.Module):
         psn_exp_init: bool = True,
         branch_readout_mode: str = "trunk_distal",
         psn_threshold_init: float = 0.0,
+        ssf_L: int = 0,
         ssf_thre: int = 4,
         ssf: bool = True,  ##
         activation_checkpoint: bool = True,
@@ -327,6 +329,7 @@ class DendSomaS4Activation(nn.Module):
                 psn_backend=psn_backend,
                 psn_threshold_init=psn_threshold_init,
                 thre=ssf_thre,
+                L=ssf_L,
                 ssf=ssf,
                 step_mode="m",
             )
@@ -460,6 +463,7 @@ class StandardS4Block(nn.Module):
         dend_soma_psn_exp_init: bool = True,
         dend_soma_psn_threshold_init: float = 0.0,
         dend_soma_ssf_thre: int = 4,
+        dend_soma_ssf_L: int = 0,
         dend_soma_activation_checkpoint: bool = True,
         s4_layer_factory: Optional[S4LayerFactory] = None,
     ) -> None:
@@ -522,6 +526,7 @@ class StandardS4Block(nn.Module):
                 "psn_exp_init": dend_soma_psn_exp_init,
                 "psn_threshold_init": dend_soma_psn_threshold_init,
                 "ssf_thre": dend_soma_ssf_thre,
+                "ssf_L": dend_soma_ssf_L,
                 "activation_checkpoint": dend_soma_activation_checkpoint,
             }
 
@@ -647,6 +652,7 @@ class StandardS4ForLRA(nn.Module):
         dend_soma_psn_exp_init: bool = False,
         dend_soma_psn_threshold_init: float = 0.0,
         dend_soma_ssf_thre: int = 4,
+        dend_soma_ssf_L: int = 0,
         dend_soma_activation_checkpoint: bool = True,
         backend: str = "official",
     ) -> None:
@@ -706,6 +712,7 @@ class StandardS4ForLRA(nn.Module):
             dend_soma_psn_exp_init=dend_soma_psn_exp_init,
             dend_soma_psn_threshold_init=dend_soma_psn_threshold_init,
             dend_soma_ssf_thre=dend_soma_ssf_thre,
+            dend_soma_ssf_L=dend_soma_ssf_L,
             dend_soma_activation_checkpoint=dend_soma_activation_checkpoint,
             backend=backend,
         )
@@ -744,6 +751,7 @@ class StandardS4ForLRA(nn.Module):
                     dend_soma_psn_exp_init=dend_soma_psn_exp_init,
                     dend_soma_psn_threshold_init=dend_soma_psn_threshold_init,
                     dend_soma_ssf_thre=dend_soma_ssf_thre,
+                    dend_soma_ssf_L=dend_soma_ssf_L,
                     dend_soma_activation_checkpoint=dend_soma_activation_checkpoint,
                     s4_layer_factory=s4_layer_factory,
                 )
@@ -838,13 +846,13 @@ LRA_S4_PRESETS: Dict[str, Dict[str, object]] = {
     "listops": {
         "n_layers": 8, #
         "d_model": 128, #
-        "d_state": 64, #
+        "d_state": 4, #
         "dropout": 0.0,
         "norm": "batch",
         "prenorm": False,
         "l_max": 2048,
         "layer_lr": {"dt": None, "A": 0.001, "B": 0.001},
-        "n_ssm": 128, #
+        "n_ssm": 1, #
         "decoder_mode": "pool",
     },
     "text": {
@@ -874,13 +882,13 @@ LRA_S4_PRESETS: Dict[str, Dict[str, object]] = {
     "aan": {
         "n_layers": 6,
         "d_model": 256,
-        "d_state": 64, #
+        "d_state": 4, 
         "dropout": 0.0,
         "norm": "batch",
         "prenorm": True,
         "l_max": 4000,
         "layer_lr": {"dt": None, "A": 0.001, "B": 0.001},
-        "n_ssm": 256, #
+        "n_ssm": 1, 
         "retrieval": True,
         "decoder_mode": "pool",
     },
