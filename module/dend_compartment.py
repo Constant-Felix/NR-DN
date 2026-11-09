@@ -199,6 +199,16 @@ class BaseDendCompartment(base.MemoryModule, abc.ABC):
                 f"but get {self.step_mode} instead."
             )
 
+BRANCH_READOUT_MODES = ("trunk_distal", "linear", "linear_act", "glu", "swiglu", "mlp")
+READOUT_ACTIVATIONS = {
+    "gelu": F.gelu,
+    "tanh": torch.tanh,
+    "relu": F.relu,
+    "sigmoid": torch.sigmoid,
+    "silu": F.silu,
+}
+
+
 class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
     """Active-edge channel-preserving trunk-distal dendrite.
 
@@ -214,6 +224,20 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
     ``MaskedSlidingPSN``. Each branch owns one learnable vector of length ``P``
     and all compartments routed to that branch share it. ``integration_backend``
     selects the original dense GEMM or an equivalent FFT convolution.
+
+    ``branch_readout_mode`` selects the branch readout R(z) on the K compartment
+    states z of each routed branch (parameters shared per branch template):
+
+    * ``"trunk_distal"`` (default): DMPR.
+    * ``"linear"``:     R = w^T z + b
+    * ``"linear_act"``: R = act(w^T z + b), act = ``readout_activation``
+    * ``"glu"``:        R = (w1^T z + b1) * sigmoid(w2^T z + b2)
+    * ``"swiglu"``:     R = (w1^T z + b1) * SiLU(w2^T z + b2)
+    * ``"mlp"``:        R = w2^T sigmoid(W1 z + b1) + b2, hidden width
+      ``readout_mlp_hidden``
+
+    Every readout feeds the same somatic input I = output_scale * R
+    + input_residual_scale * X (Eq. 11).
     """
 
     def __init__(
@@ -249,6 +273,8 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         integration_backend: str = "fft",
         branch_readout_mode: str = "trunk_distal",
         free_window_order: Optional[int] = None,
+        readout_activation: str = "gelu",
+        readout_mlp_hidden: int = 2,
     ):
         super().__init__(v_rest, step_mode, store_v_seq)
         if channels is None:
@@ -267,8 +293,12 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
             raise ValueError("branch_assignment must be 'window' or 'cyclic'")
         if merge_norm not in {"sqrt", "mean", "sum"}:
             raise ValueError("merge_norm must be one of: 'sqrt', 'mean', 'sum'")
-        if branch_readout_mode not in {"trunk_distal", "linear"}:
-            raise ValueError("branch_readout_mode must be 'trunk_distal' or 'linear'")
+        if branch_readout_mode not in BRANCH_READOUT_MODES:
+            raise ValueError(f"branch_readout_mode must be one of {BRANCH_READOUT_MODES}")
+        if readout_activation not in READOUT_ACTIVATIONS:
+            raise ValueError(f"readout_activation must be one of {tuple(READOUT_ACTIVATIONS)}")
+        if int(readout_mlp_hidden) <= 0:
+            raise ValueError("readout_mlp_hidden must be positive")
         if integration_backend not in {"gemm", "fft"}:
             raise ValueError("integration_backend must be 'gemm' or 'fft'")
         if tau_min <= 1.0 or tau_max <= 1.0:
@@ -307,6 +337,8 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         self.integration_backend = integration_backend
         self.free_window_order = free_window_order
         self.branch_readout_mode = branch_readout_mode
+        self.readout_activation = readout_activation
+        self.readout_mlp_hidden = int(readout_mlp_hidden)
         self.store_branch_monitor = bool(store_branch_monitor)
 
         active_branch_index = self._make_active_branch_index(
@@ -347,19 +379,15 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
             self.register_buffer("edge_channel_gain", torch.zeros(self.num_branches, self.channels))
 
         self.compartment_input_logits = nn.Parameter(torch.zeros(self.num_branches, self.compartments_per_branch))
-        self.distal_mix_logits = nn.Parameter(torch.zeros(self.num_branches, self.distal_count))
-        self.distal_gate_alpha = nn.Parameter(torch.full((self.num_branches, self.distal_count), float(distal_gate_alpha_init)))
-        self.distal_gate_threshold = nn.Parameter(torch.full((self.num_branches, self.distal_count), float(distal_gate_threshold_init)))
-        self.distal_gain = nn.Parameter(torch.full((self.num_branches,), float(distal_gain_init)))
-        self.distal_residual_gain = nn.Parameter(torch.full((self.num_branches,), float(distal_residual_init)))
-        self.branch_strength = nn.Parameter(torch.ones(self.num_branches))
-        # Physical-space readout: C starts at the terminal compartment, while
-        # the branch-level direct feedthrough D starts disabled.
-        if self.branch_readout_mode == "linear":
-            linear_comp_readout = torch.zeros(self.num_branches, self.compartments_per_branch)
-            linear_comp_readout[:, -1] = 1.0
-            self.linear_comp_readout = nn.Parameter(linear_comp_readout)
-            self.linear_input_readout = nn.Parameter(torch.zeros(self.num_branches,self.compartments_per_branch)) #
+        if self.branch_readout_mode == "trunk_distal":
+            self.distal_mix_logits = nn.Parameter(torch.zeros(self.num_branches, self.distal_count))
+            self.distal_gate_alpha = nn.Parameter(torch.full((self.num_branches, self.distal_count), float(distal_gate_alpha_init)))
+            self.distal_gate_threshold = nn.Parameter(torch.full((self.num_branches, self.distal_count), float(distal_gate_threshold_init)))
+            self.distal_gain = nn.Parameter(torch.full((self.num_branches,), float(distal_gain_init)))
+            self.distal_residual_gain = nn.Parameter(torch.full((self.num_branches,), float(distal_residual_init)))
+            self.branch_strength = nn.Parameter(torch.ones(self.num_branches))
+        else:
+            self._init_readout_parameters()
         self.input_residual_scale = nn.Parameter(torch.tensor(float(input_residual_init)))
         self.output_scale = nn.Parameter(torch.tensor(1.0))
 
@@ -367,6 +395,34 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         self.branch_mod_seq = None
         self.distal_gate_seq = None
         self.branch_output_seq = None
+
+    def _init_readout_parameters(self):
+        """Template-shared parameters of the W1 readouts (Table R1-1).
+
+        Weights and biases use the default ``nn.Linear`` initialization
+        U(-1/sqrt(fan_in), 1/sqrt(fan_in)) of each projection.
+        """
+        B, K, H = self.num_branches, self.compartments_per_branch, self.readout_mlp_hidden
+
+        def uniform(*shape, fan_in):
+            bound = 1.0 / math.sqrt(fan_in)
+            return nn.Parameter(torch.empty(*shape).uniform_(-bound, bound))
+
+        mode = self.branch_readout_mode
+        if mode in ("linear", "linear_act"):
+            self.readout_weight = uniform(B, K, fan_in=K)               # w
+            self.readout_bias = uniform(B, fan_in=K)                    # b
+        elif mode in ("glu", "swiglu"):
+            # index 0: value projection (w1, b1); index 1: gate projection (w2, b2)
+            self.readout_weight = uniform(B, 2, K, fan_in=K)
+            self.readout_bias = uniform(B, 2, fan_in=K)
+        elif mode == "mlp":
+            self.readout_hidden_weight = uniform(B, H, K, fan_in=K)     # W1
+            self.readout_hidden_bias = uniform(B, H, fan_in=K)          # b1
+            self.readout_out_weight = uniform(B, H, fan_in=H)           # w2
+            self.readout_out_bias = uniform(B, fan_in=H)                # b2
+        else:
+            raise ValueError(f"no readout parameters for mode {mode!r}")
 
     @staticmethod
     def _make_active_branch_index(
@@ -834,22 +890,46 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         rms = torch.sqrt(delta.square().mean(dim=reduce_dims, keepdim=True) + 1e-6)
         return delta / rms
 
-    def _compute_linear_branch_output(self, state: torch.Tensor, raw_input: torch.Tensor):
-        """Apply the routed branch readout C_r z + D_r x to every active edge."""
-        if raw_input is None:
-            raise ValueError("raw_input is required when branch_readout_mode='linear'")
+    def _compute_readout_branch_output(self, state: torch.Tensor):
+        """W1 readouts (Table R1-1) on the raw compartment states.
 
-        comp_readout = self._edge_branch_value(
-            self.linear_comp_readout.to(dtype=state.dtype, device=state.device)
-        )
-        input_readout = self._edge_branch_value(
-            self.linear_input_readout.to(dtype=state.dtype, device=state.device)
-        )
-        comp_readout = self._view_edge_compartment(comp_readout, state)
-        raw_input = raw_input.unsqueeze(1)
-        input_readout = self._view_edge_channel(input_readout, raw_input)
+        ``state`` is ``[M, d, C, K, *spatial]``; the result is ``[M, d, C, *spatial]``.
+        Unlike DMPR, no RMS normalization is applied to the states.
+        """
+        dtype, device = state.dtype, state.device
+        d, C = self.branch_degree, self.channels
+        spatial = [1] * (state.dim() - 4)
 
-        y = (state * comp_readout).sum(dim=3) + raw_input * input_readout
+        def routed(value):
+            # [B, *rest] -> [d, C, *rest], the template of each active edge
+            return self._edge_branch_value(value.to(dtype=dtype, device=device))
+
+        def project(weight, bias):
+            # sum_k weight[k] * z_k + bias with weight [B, K] and bias [B]
+            w = routed(weight).view(1, d, C, self.compartments_per_branch, *spatial)
+            b = routed(bias).view(1, d, C, *spatial)
+            return (state * w).sum(dim=3) + b
+
+        mode = self.branch_readout_mode
+        if mode in ("linear", "linear_act"):
+            y = project(self.readout_weight, self.readout_bias)
+            if mode == "linear_act":
+                y = READOUT_ACTIVATIONS[self.readout_activation](y)
+        elif mode in ("glu", "swiglu"):
+            value = project(self.readout_weight[:, 0], self.readout_bias[:, 0])
+            gate = project(self.readout_weight[:, 1], self.readout_bias[:, 1])
+            gate = torch.sigmoid(gate) if mode == "glu" else F.silu(gate)
+            y = value * gate
+        elif mode == "mlp":
+            H = self.readout_mlp_hidden
+            w1 = routed(self.readout_hidden_weight).view(1, d, C, H, self.compartments_per_branch, *spatial)
+            b1 = routed(self.readout_hidden_bias).view(1, d, C, H, *spatial)
+            hidden = torch.sigmoid((state.unsqueeze(3) * w1).sum(dim=4) + b1)
+            w2 = routed(self.readout_out_weight).view(1, d, C, H, *spatial)
+            b2 = routed(self.readout_out_bias).view(1, d, C, *spatial)
+            y = (hidden * w2).sum(dim=3) + b2
+        else:
+            raise ValueError(f"unknown branch_readout_mode {mode!r}")
 
         if self.store_branch_monitor:
             self._branch_mod_step = torch.zeros_like(y).detach()
@@ -862,8 +942,8 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         return y
 
     def _compute_branch_output(self, state: torch.Tensor, raw_input: torch.Tensor = None):
-        if self.branch_readout_mode == "linear":
-            return self._compute_linear_branch_output(state, raw_input)
+        if self.branch_readout_mode != "trunk_distal":
+            return self._compute_readout_branch_output(state)
 
         trunk = state[:, :, :, 0, ...]
         distal = state[:, :, :, 1:, ...]
@@ -909,8 +989,8 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         elif self.merge_norm == "mean":
             y = y / degree
         y = self.output_scale * y
-        if self.branch_readout_mode != "linear":
-            y = y + self.input_residual_scale * raw_input
+        # Eq. 11: I = eta * R + xi * X, identical for every branch readout.
+        y = y + self.input_residual_scale * raw_input
         return y
 
     def _compute_branch_output_sequence(self, state_seq: torch.Tensor, raw_input_seq: torch.Tensor = None):
@@ -1117,3 +1197,4 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
             self._distal_gate_step = None
             self._branch_output_step = None
         return y_seq
+

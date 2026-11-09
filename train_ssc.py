@@ -65,28 +65,40 @@ def scalar_value(value):
     return float(value)
 
 #device = 'cuda'
+# Rebuttal W4 (Tables R1-4 / R1-5): somatic kernel and firing range [L, U].
+# "free": learnable sliding window of length `order` (default NR-DN soma);
+# "exp":  exponential kernel over all T lags (MMDEND-style), same firing rule.
+SOMA_KERNELS = ("free", "exp")
+
+
+def make_soma(kernel, order, L, thre):
+    if kernel == "exp":
+        return soma.ExponentialSoma_ssf(L=L, thre=thre)
+    return soma.PSNIntergerSoma_ssf(psn_order=order, L=L, thre=thre, psn_exp_init=True, psn_backend='fft')
+
+
 class ff_SSC(nn.Module):
-    def __init__(self, in_dim=700, hidden=[128, 128, 128], out_dim=35,drop=0.1,T=250):  ##
+    def __init__(self, in_dim=700, hidden=[128, 128, 128], out_dim=35,drop=0.1,T=250,readout='trunk_distal',readout_act='gelu',L=0,U=1,soma_kernel='free'):  ##
         super().__init__()
         layers = []
         layers += [nn.Linear(in_dim, hidden[0], bias=True),
                    #layer.BatchNorm1d(hidden[0]),
                    nn.Dropout(drop),
-                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[0],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'), 
+                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[0],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act), 
                    #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
-                   soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=1)]
+                   make_soma(soma_kernel, T, L, U)]
         layers += [nn.Linear(hidden[0], hidden[1], bias=True),
                    #layer.BatchNorm1d(hidden[1]),
                    nn.Dropout(drop),
-                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[1],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'),  
+                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[1],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act),  
                    #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
-                   soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=1)]
+                   make_soma(soma_kernel, T, L, U)]
         layers += [nn.Linear(hidden[1], hidden[2], bias=True),
                    #layer.BatchNorm1d(hidden[1]),
                    nn.Dropout(drop),
-                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[2],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean'),  
+                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[2],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act),  
                    #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
-                   soma.PSNIntergerSoma_ssf(psn_order=T,psn_exp_init=True,thre=1)]
+                   make_soma(soma_kernel, T, L, U)]
 
 
         layers += [nn.Linear(hidden[2], out_dim,bias=True)]
@@ -538,6 +550,11 @@ def check_eval_args_against_training(args):
         'ssc_preprocess': '--ssc-preprocess',
         'ssc_soma': '--ssc-soma',
         'ssc_n_bins': '--ssc-n-bins',
+        'readout': '--readout',
+        'readout_act': '--readout-act',
+        'L': '--L',
+        'U': '--U',
+        'soma_kernel': '--soma-kernel',
     }
     mismatched = []
     for key, flag in flags.items():
@@ -578,7 +595,7 @@ def evaluate_checkpoint(model, test_loader, args, gpu):
     return acc1, acc5, test_loss
 
 
-# python train_ssc.py --task SSC --device cuda:6 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1       --epochs 400 --workers 16 --cos   --optim sgd    --lr 0.1
+# python train_ssc.py --task SSC --device cuda:0 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1 --soma-kernel exp       --epochs 400 --workers 16 --cos   --optim sgd    --lr 0.1
 # python train_ssc.py --task SSC --device cuda:6 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1
 # python train_ssc.py --eval-only --checkpoint <results_dir>/model_best.pth.tar --task SSC --ssc-preprocess asrc --ssc-soma psn --ssc-n-bins 1 --device cuda:6
 # python train_ssc.py --task SHD --device cuda:1 --lr 0.005 --data-root /data/hyx/ViT-dend/data/shd/data_shd --wd 5e-4 --cos
@@ -609,6 +626,16 @@ parser.add_argument('--ssc-preprocess', default=None, choices=['current', 'asrc'
                     help='SSC preprocessing pipeline: current fixed-time bins or ASRC-SNN style')
 parser.add_argument('--ssc-n-bins', default=5, type=int,
                     help='channel bin size for ASRC-SNN style SSC preprocessing')
+# Rebuttal W1 (Table R1-1): branch readout of ff_SSC; trunk_distal = DMPR (default)
+parser.add_argument('--readout', default='trunk_distal', choices=list(dend_compartment.BRANCH_READOUT_MODES),
+                    help='branch readout of the dendrite (ff_SSC only)')
+parser.add_argument('--readout-act', default='gelu', choices=list(dend_compartment.READOUT_ACTIVATIONS),
+                    help='activation of --readout linear_act')
+# Rebuttal W4 (Tables R1-4 / R1-5): firing range and somatic kernel of ff_SSC
+parser.add_argument('--L', default=0, type=int, help='lower firing bound L (ff_SSC only)')
+parser.add_argument('--U', default=1, type=int, help='upper firing bound U (ff_SSC only)')
+parser.add_argument('--soma-kernel', default='free', choices=list(SOMA_KERNELS),
+                    help='free sliding window (W=T) or exponential kernel (ff_SSC only)')
 parser.add_argument('--ssc-soma', '--model-version', dest='ssc_soma',
                     default='psn', type=str.lower, choices=['psn', 'src', 'asrc'],
                     help='SSC soma: current parallel PSN, fixed-skip SRC-LIF, or adaptive-skip ASRC-LIF')
@@ -643,6 +670,10 @@ parser.add_argument('--checkpoint', default='', type=str, metavar='PATH',
                          'results directory (then model_best.pth.tar is used)')
 
 args = parser.parse_args()
+if args.readout != 'trunk_distal' and (args.task.upper() != 'SSC' or args.ssc_soma != 'psn'):
+    raise ValueError("--readout is only wired into ff_SSC (--task SSC --ssc-soma psn)")
+if ((args.L, args.U) != (0, 1) or args.soma_kernel != 'free') and (args.task.upper() != 'SSC' or args.ssc_soma != 'psn'):
+    raise ValueError("--L/--U/--soma-kernel are only wired into ff_SSC (--task SSC --ssc-soma psn)")
 paper_aligned_soma = (
     args.task.upper() == 'SSC' and args.ssc_soma in {'src', 'asrc'}
 )
@@ -704,7 +735,12 @@ if args.eval_only:
         args.results_dir = os.path.dirname(args.checkpoint)
     log_prefix = "eval-"
 if args.results_dir == '':
-    args.results_dir = '/data3/hyx/NR-DN/exp/'+args.task+'ff'+'-' + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    readout_tag = '' if args.readout == 'trunk_distal' else '-ro-' + args.readout + ('-' + args.readout_act if args.readout == 'linear_act' else '')
+    if (args.L, args.U) != (0, 1):
+        readout_tag += f'-L{args.L}U{args.U}'
+    if args.soma_kernel != 'free':
+        readout_tag += f'-soma-{args.soma_kernel}'
+    args.results_dir = '/data3/hyx/NR-DN/exp/'+args.task+'ff'+readout_tag+'-' + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
 Path(args.results_dir).mkdir(parents=True, exist_ok=True)
 logger = setup_train_logging(os.path.join(args.results_dir, log_prefix + datetime.now().strftime("%Y-%m-%d-%H-%M-%S") + ".txt"))
@@ -773,7 +809,9 @@ if args.task.upper() == 'SHD':
 else:
     if args.ssc_soma == 'psn':
         model = ff_SSC(
-            in_dim=in_dim, out_dim=out_dim, drop=args.drop, T=T
+            in_dim=in_dim, out_dim=out_dim, drop=args.drop, T=T,
+            readout=args.readout, readout_act=args.readout_act,
+            L=args.L, U=args.U, soma_kernel=args.soma_kernel,
         ).to(gpu)
     else:
         model = ff_SSC_SRC_ASRC(
@@ -794,9 +832,10 @@ if args.eval_only:
     logging.info(str(args))
     evaluate_checkpoint(model, test_loader, args, gpu)
     sys.exit(0)
+_asrc_container = getattr(soma, 'adskip_RecurrentContainer', None)
 asrc_soma_modules = [
     module for module in model.modules()
-    if isinstance(module, soma.adskip_RecurrentContainer)
+    if _asrc_container is not None and isinstance(module, _asrc_container)
 ]
 
 logging.info(str(model))
@@ -856,8 +895,9 @@ if args.print_freq > len(train_loader):
 
 best_acc = argparse.Namespace(top1=0, top5=0)
 for epoch in range(start_epoch, args.epochs):
-    for m in model.modules():
-        if isinstance(m, DecayPorderMaskedLinear):
+    _decay_porder_cls = globals().get('DecayPorderMaskedLinear')
+    for m in (model.modules() if _decay_porder_cls is not None else ()):
+        if isinstance(m, _decay_porder_cls):
             mk = epoch / (args.epochs - 1)
             m.k = min(mk * 8, 1.)
     epoch_start_time = time.time()

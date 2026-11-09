@@ -230,8 +230,20 @@ class RandomCutmix(torch.nn.Module):
         )
         return s
 
+# Rebuttal W4 (Tables R1-4 / R1-5): somatic kernel and firing range [L, U].
+# "free": learnable sliding window of length `order` (default NR-DN soma);
+# "exp":  exponential kernel over all T lags (MMDEND-style), same firing rule.
+SOMA_KERNELS = ("free", "exp")
+
+
+def make_soma(kernel, order, L, thre):
+    if kernel == "exp":
+        return soma.ExponentialSoma_ssf(L=L, thre=thre)
+    return soma.PSNIntergerSoma_ssf(psn_order=order, L=L, thre=thre, psn_exp_init=True, psn_backend='fft')
+
+
 class CIFAR10Net(nn.Module):
-    def __init__(self, channels, class_num: int, T: int=32, P:int=-1,L=-4,thre=4,num_branches=8,compartments_per_branch=4,branch_degree=1):
+    def __init__(self, channels, class_num: int, T: int=32, P:int=-1,L=-4,thre=4,num_branches=8,compartments_per_branch=4,branch_degree=1,readout='trunk_distal',readout_act='gelu',soma_kernel='free'):
         super().__init__()
         conv = []
         for i in range(2):
@@ -242,9 +254,8 @@ class CIFAR10Net(nn.Module):
                     in_channels = channels
                 conv.append(layer.Conv1d(in_channels, channels, kernel_size=3, padding=1, bias=False))
                 conv.append(layer.BatchNorm1d(channels))
-                conv.append(SparseChannelPreservingTrunkDistalDendCompartment(channels,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean'))
-                conv.append(soma.PSNIntergerSoma_ssf(psn_order=T//8,L=L,thre=thre,psn_exp_init=True,psn_backend='fft'))
-                #conv.append(soma.ExponentialSoma_ssf(L=L,thre=thre))
+                conv.append(SparseChannelPreservingTrunkDistalDendCompartment(channels,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act))
+                conv.append(make_soma(soma_kernel, T//8, L, thre))
                 #conv.append(soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'))
 
             conv.append(layer.AvgPool1d(2))
@@ -255,10 +266,9 @@ class CIFAR10Net(nn.Module):
         self.fc = nn.Sequential(
             layer.Flatten(),
             layer.Linear(channels * 8, channels * 8 // 4),
-            SparseChannelPreservingTrunkDistalDendCompartment(channels * 2,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean'),
+            SparseChannelPreservingTrunkDistalDendCompartment(channels * 2,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act),
             #soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'),
-            soma.PSNIntergerSoma_ssf(psn_order=T//8,L=L,thre=thre,psn_exp_init=True,psn_backend='fft'),
-            #soma.ExponentialSoma_ssf(L=L,thre=thre),
+            make_soma(soma_kernel, T//8, L, thre),
             layer.Linear(channels * 8 // 4, class_num),
         )
 
@@ -270,13 +280,13 @@ class CIFAR10Net(nn.Module):
         x_seq = self.fc(self.conv(x_seq))  # [W, N, C]
         return x_seq.mean(0)
 
-# python train_seq.py -data-dir /data2/hyx/ViT-dend/data/cifar10 -amp -class-num 10 -channels 128  -warmup-epochs 0  -epochs 400 -opt adamw -lr 0.001  -resume logs/pt/None_e400_b128_adamw_lr0.001_c128_20261016-060357_amp_P32/checkpoint_latest.pth
+# python train_seq.py -data-dir /data2/hyx/ViT-dend/data/cifar100 -amp -class-num 100 -channels 128  -warmup-epochs 0  -epochs 400 -opt adamw -lr 0.001 -soma-kernel exp -resume logs/pt/None_e400_b128_adamw_lr0.001_c128_20261016-060357_amp_P32/checkpoint_latest.pth
 
 from datetime import datetime
 def main():
 
     parser = argparse.ArgumentParser(description='Classify Sequential CIFAR10/100')
-    parser.add_argument('-device', default='cuda:5', help='device')
+    parser.add_argument('-device', default='cuda:6', help='device')
     parser.add_argument('-b', default=128, type=int, help='batch size')
     parser.add_argument('-epochs', default=256, type=int, metavar='N',
                         help='number of total epochs to run')
@@ -302,6 +312,13 @@ def main():
 
     parser.add_argument('-P', default=32, type=int, help='the order of the masked/sliding PSN')
     parser.add_argument('-exp-init', action='store_true', help='use the exp init method to initialize the weight of SPSN')
+    # Rebuttal W1 (Table R1-1): branch readout; trunk_distal = DMPR (default)
+    parser.add_argument('-readout', default='trunk_distal', choices=list(dend_compartment.BRANCH_READOUT_MODES), help='branch readout of the dendrite')
+    parser.add_argument('-readout-act', default='gelu', choices=list(dend_compartment.READOUT_ACTIVATIONS), help='activation of -readout linear_act')
+    # Rebuttal W4 (Tables R1-4 / R1-5): firing range and somatic kernel
+    parser.add_argument('-L', default=-4, type=int, help='lower firing bound L')
+    parser.add_argument('-U', default=4, type=int, help='upper firing bound U')
+    parser.add_argument('-soma-kernel', default='free', choices=list(SOMA_KERNELS), help='free sliding window (W=T//8) or exponential kernel')
 
 
     args = parser.parse_args()
@@ -387,6 +404,14 @@ def main():
     out_dir = f'{args.neu}_e{args.epochs}_b{args.b}_{args.opt}_lr{args.lr}_c{args.channels}_{datetime.now().strftime("%Y%m%d-%H%M%S")}'
     if args.amp:
         out_dir += '_amp'
+    if args.readout != 'trunk_distal':
+        out_dir += f'_ro-{args.readout}'
+        if args.readout == 'linear_act':
+            out_dir += f'-{args.readout_act}'
+    if (args.L, args.U) != (-4, 4):
+        out_dir += f'_L{args.L}U{args.U}'
+    if args.soma_kernel != 'free':
+        out_dir += f'_soma-{args.soma_kernel}'
 
 
 
@@ -402,7 +427,7 @@ def main():
         os.makedirs(pt_dir)
 
     #net = CIFAR10Net(channels=args.channels, neu=args.neu, T=32, class_num=args.class_num, P=args.P, exp_init=args.exp_init)
-    net = CIFAR10Net(channels=args.channels, class_num=args.class_num)  ##
+    net = CIFAR10Net(channels=args.channels, class_num=args.class_num, readout=args.readout, readout_act=args.readout_act, L=args.L, thre=args.U, soma_kernel=args.soma_kernel)  ##
     net.to(args.device)
     n_parameters = sum(p.numel() for p in net.parameters() if p.requires_grad)
     print(f"number of params: {n_parameters}")
@@ -571,4 +596,4 @@ def main():
 
 
 if __name__ == '__main__':
-    main()       
+    main() 
