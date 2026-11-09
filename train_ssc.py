@@ -65,6 +65,19 @@ def scalar_value(value):
     return float(value)
 
 #device = 'cuda'
+# Rebuttal W5 (Tables R1-6 / R1-7): proximal role and intra-branch coupling.
+# Within a branch tau_k = tau_branch * scale_k and compartment 0 is the proximal
+# one of DMPR, so "slowest" makes the slowest compartment proximal.
+PROXIMAL_TAU_SCALE = {"fastest": (1.0, 2.5), "slowest": (2.5, 1.0)}
+COUPLINGS = ("none", "chain")
+
+
+def dend_class(coupling):
+    if coupling == "chain":
+        return dend_compartment.ChainCoupledSparseDendCompartment
+    return SparseChannelPreservingTrunkDistalDendCompartment
+
+
 # Rebuttal W4 (Tables R1-4 / R1-5): somatic kernel and firing range [L, U].
 # "free": learnable sliding window of length `order` (default NR-DN soma);
 # "exp":  exponential kernel over all T lags (MMDEND-style), same firing rule.
@@ -78,25 +91,27 @@ def make_soma(kernel, order, L, thre):
 
 
 class ff_SSC(nn.Module):
-    def __init__(self, in_dim=700, hidden=[128, 128, 128], out_dim=35,drop=0.1,T=250,readout='trunk_distal',readout_act='gelu',L=0,U=1,soma_kernel='free'):  ##
+    def __init__(self, in_dim=700, hidden=[128, 128, 128], out_dim=35,drop=0.1,T=250,readout='trunk_distal',readout_act='gelu',L=0,U=1,soma_kernel='free',coupling='none',proximal='fastest'):  ##
         super().__init__()
+        dend_cls = dend_class(coupling)
+        tau_scale = PROXIMAL_TAU_SCALE[proximal]
         layers = []
         layers += [nn.Linear(in_dim, hidden[0], bias=True),
                    #layer.BatchNorm1d(hidden[0]),
                    nn.Dropout(drop),
-                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[0],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act), 
+                   dend_cls(channels=hidden[0],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale), 
                    #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
                    make_soma(soma_kernel, T, L, U)]
         layers += [nn.Linear(hidden[0], hidden[1], bias=True),
                    #layer.BatchNorm1d(hidden[1]),
                    nn.Dropout(drop),
-                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[1],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act),  
+                   dend_cls(channels=hidden[1],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale),  
                    #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
                    make_soma(soma_kernel, T, L, U)]
         layers += [nn.Linear(hidden[1], hidden[2], bias=True),
                    #layer.BatchNorm1d(hidden[1]),
                    nn.Dropout(drop),
-                   SparseChannelPreservingTrunkDistalDendCompartment(channels=hidden[2],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act),  
+                   dend_cls(channels=hidden[2],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale),  
                    #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
                    make_soma(soma_kernel, T, L, U)]
 
@@ -555,6 +570,8 @@ def check_eval_args_against_training(args):
         'L': '--L',
         'U': '--U',
         'soma_kernel': '--soma-kernel',
+        'proximal': '--proximal',
+        'coupling': '--coupling',
     }
     mismatched = []
     for key, flag in flags.items():
@@ -636,6 +653,11 @@ parser.add_argument('--L', default=0, type=int, help='lower firing bound L (ff_S
 parser.add_argument('--U', default=1, type=int, help='upper firing bound U (ff_SSC only)')
 parser.add_argument('--soma-kernel', default='free', choices=list(SOMA_KERNELS),
                     help='free sliding window (W=T) or exponential kernel (ff_SSC only)')
+# Rebuttal W5 (Tables R1-6 / R1-7): proximal compartment and intra-branch coupling of ff_SSC
+parser.add_argument('--proximal', default='fastest', choices=list(PROXIMAL_TAU_SCALE),
+                    help='which compartment (by initial tau) is proximal in each branch (ff_SSC only)')
+parser.add_argument('--coupling', default='none', choices=list(COUPLINGS),
+                    help='none: diagonal A; chain: symmetric tridiagonal A (ff_SSC only)')
 parser.add_argument('--ssc-soma', '--model-version', dest='ssc_soma',
                     default='psn', type=str.lower, choices=['psn', 'src', 'asrc'],
                     help='SSC soma: current parallel PSN, fixed-skip SRC-LIF, or adaptive-skip ASRC-LIF')
@@ -674,6 +696,8 @@ if args.readout != 'trunk_distal' and (args.task.upper() != 'SSC' or args.ssc_so
     raise ValueError("--readout is only wired into ff_SSC (--task SSC --ssc-soma psn)")
 if ((args.L, args.U) != (0, 1) or args.soma_kernel != 'free') and (args.task.upper() != 'SSC' or args.ssc_soma != 'psn'):
     raise ValueError("--L/--U/--soma-kernel are only wired into ff_SSC (--task SSC --ssc-soma psn)")
+if (args.proximal != 'fastest' or args.coupling != 'none') and (args.task.upper() != 'SSC' or args.ssc_soma != 'psn'):
+    raise ValueError("--proximal/--coupling are only wired into ff_SSC (--task SSC --ssc-soma psn)")
 paper_aligned_soma = (
     args.task.upper() == 'SSC' and args.ssc_soma in {'src', 'asrc'}
 )
@@ -740,6 +764,10 @@ if args.results_dir == '':
         readout_tag += f'-L{args.L}U{args.U}'
     if args.soma_kernel != 'free':
         readout_tag += f'-soma-{args.soma_kernel}'
+    if args.proximal != 'fastest':
+        readout_tag += f'-prox-{args.proximal}'
+    if args.coupling != 'none':
+        readout_tag += f'-coup-{args.coupling}'
     args.results_dir = '/data3/hyx/NR-DN/exp/'+args.task+'ff'+readout_tag+'-' + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
 Path(args.results_dir).mkdir(parents=True, exist_ok=True)
@@ -812,6 +840,7 @@ else:
             in_dim=in_dim, out_dim=out_dim, drop=args.drop, T=T,
             readout=args.readout, readout_act=args.readout_act,
             L=args.L, U=args.U, soma_kernel=args.soma_kernel,
+            coupling=args.coupling, proximal=args.proximal,
         ).to(gpu)
     else:
         model = ff_SSC_SRC_ASRC(

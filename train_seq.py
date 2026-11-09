@@ -242,9 +242,24 @@ def make_soma(kernel, order, L, thre):
     return soma.PSNIntergerSoma_ssf(psn_order=order, L=L, thre=thre, psn_exp_init=True, psn_backend='fft')
 
 
+# Rebuttal W5 (Tables R1-6 / R1-7): proximal role and intra-branch coupling.
+# Within a branch tau_k = tau_branch * scale_k and compartment 0 is the proximal
+# one of DMPR, so "slowest" makes the slowest compartment proximal.
+PROXIMAL_TAU_SCALE = {"fastest": (1.0, 2.5), "slowest": (2.5, 1.0)}
+COUPLINGS = ("none", "chain")
+
+
+def dend_class(coupling):
+    if coupling == "chain":
+        return dend_compartment.ChainCoupledSparseDendCompartment
+    return SparseChannelPreservingTrunkDistalDendCompartment
+
+
 class CIFAR10Net(nn.Module):
-    def __init__(self, channels, class_num: int, T: int=32, P:int=-1,L=-4,thre=4,num_branches=8,compartments_per_branch=4,branch_degree=1,readout='trunk_distal',readout_act='gelu',soma_kernel='free'):
+    def __init__(self, channels, class_num: int, T: int=32, P:int=-1,L=-4,thre=4,num_branches=8,compartments_per_branch=4,branch_degree=1,readout='trunk_distal',readout_act='gelu',soma_kernel='free',coupling='none',proximal='fastest'):
         super().__init__()
+        dend_cls = dend_class(coupling)
+        tau_scale = PROXIMAL_TAU_SCALE[proximal]
         conv = []
         for i in range(2):
             for j in range(3):
@@ -254,7 +269,7 @@ class CIFAR10Net(nn.Module):
                     in_channels = channels
                 conv.append(layer.Conv1d(in_channels, channels, kernel_size=3, padding=1, bias=False))
                 conv.append(layer.BatchNorm1d(channels))
-                conv.append(SparseChannelPreservingTrunkDistalDendCompartment(channels,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act))
+                conv.append(dend_cls(channels,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale))
                 conv.append(make_soma(soma_kernel, T//8, L, thre))
                 #conv.append(soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'))
 
@@ -266,7 +281,7 @@ class CIFAR10Net(nn.Module):
         self.fc = nn.Sequential(
             layer.Flatten(),
             layer.Linear(channels * 8, channels * 8 // 4),
-            SparseChannelPreservingTrunkDistalDendCompartment(channels * 2,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act),
+            dend_cls(channels * 2,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale),
             #soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'),
             make_soma(soma_kernel, T//8, L, thre),
             layer.Linear(channels * 8 // 4, class_num),
@@ -280,13 +295,13 @@ class CIFAR10Net(nn.Module):
         x_seq = self.fc(self.conv(x_seq))  # [W, N, C]
         return x_seq.mean(0)
 
-# python train_seq.py -data-dir /data2/hyx/ViT-dend/data/cifar100 -amp -class-num 100 -channels 128  -warmup-epochs 0  -epochs 400 -opt adamw -lr 0.001 -soma-kernel exp -resume logs/pt/None_e400_b128_adamw_lr0.001_c128_20261016-060357_amp_P32/checkpoint_latest.pth
+# python train_seq.py -data-dir /data2/hyx/ViT-dend/data/cifar100 -amp -class-num 100 -channels 128  -warmup-epochs 0  -epochs 400 -opt adamw -lr 0.001 -proximal slowest   -resume logs/pt/None_e400_b128_adamw_lr0.001_c128_20261016-060357_amp_P32/checkpoint_latest.pth
 
 from datetime import datetime
 def main():
 
     parser = argparse.ArgumentParser(description='Classify Sequential CIFAR10/100')
-    parser.add_argument('-device', default='cuda:6', help='device')
+    parser.add_argument('-device', default='cuda:5', help='device')
     parser.add_argument('-b', default=128, type=int, help='batch size')
     parser.add_argument('-epochs', default=256, type=int, metavar='N',
                         help='number of total epochs to run')
@@ -319,6 +334,9 @@ def main():
     parser.add_argument('-L', default=-4, type=int, help='lower firing bound L')
     parser.add_argument('-U', default=4, type=int, help='upper firing bound U')
     parser.add_argument('-soma-kernel', default='free', choices=list(SOMA_KERNELS), help='free sliding window (W=T//8) or exponential kernel')
+    # Rebuttal W5 (Tables R1-6 / R1-7): proximal compartment and intra-branch coupling
+    parser.add_argument('-proximal', default='fastest', choices=list(PROXIMAL_TAU_SCALE), help='which compartment (by initial tau) is proximal in each branch')
+    parser.add_argument('-coupling', default='none', choices=list(COUPLINGS), help='none: diagonal A; chain: symmetric tridiagonal A')
 
 
     args = parser.parse_args()
@@ -412,6 +430,10 @@ def main():
         out_dir += f'_L{args.L}U{args.U}'
     if args.soma_kernel != 'free':
         out_dir += f'_soma-{args.soma_kernel}'
+    if args.proximal != 'fastest':
+        out_dir += f'_prox-{args.proximal}'
+    if args.coupling != 'none':
+        out_dir += f'_coup-{args.coupling}'
 
 
 
@@ -427,7 +449,7 @@ def main():
         os.makedirs(pt_dir)
 
     #net = CIFAR10Net(channels=args.channels, neu=args.neu, T=32, class_num=args.class_num, P=args.P, exp_init=args.exp_init)
-    net = CIFAR10Net(channels=args.channels, class_num=args.class_num, readout=args.readout, readout_act=args.readout_act, L=args.L, thre=args.U, soma_kernel=args.soma_kernel)  ##
+    net = CIFAR10Net(channels=args.channels, class_num=args.class_num, readout=args.readout, readout_act=args.readout_act, L=args.L, thre=args.U, soma_kernel=args.soma_kernel, coupling=args.coupling, proximal=args.proximal)  ##
     net.to(args.device)
     n_parameters = sum(p.numel() for p in net.parameters() if p.requires_grad)
     print(f"number of params: {n_parameters}")

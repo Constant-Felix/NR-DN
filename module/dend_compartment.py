@@ -1198,3 +1198,135 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
             self._branch_output_step = None
         return y_seq
 
+
+
+class ChainCoupledSparseDendCompartment(SparseChannelPreservingTrunkDistalDendCompartment):
+    """Rebuttal W5 (Table R1-7): symmetric tridiagonal intra-branch coupling.
+
+    Compartments 0 (proximal) -> K-1 form a chain. For branch template j the
+    diagonal transition of Eq. 2 is replaced by
+
+        A_j = I - diag(1 / tau_j) - L(c_j),
+        L(c)_kk = c_{k-1,k} + c_{k,k+1},   L(c)_{k,k+1} = L(c)_{k+1,k} = -c_{k,k+1},
+
+    i.e. a passive chain Laplacian (diffusion between neighbouring compartments).
+    Each coupling is c_{k,k+1} = c_max * sigmoid(coupling_logits) with
+
+        c_max = min(1 - 1/tau_k, 1 - 1/tau_{k+1}) / 4   (computed from the current
+                                                         tau, gradient detached),
+
+    so A_j is symmetric with all eigenvalues in (0, 1) (Gershgorin): real,
+    stable and non-oscillatory, like the diagonal model. Couplings start at
+    ``coupling_init_ratio * c_max``. The input vector is unchanged
+    (b = g_c * q / tau), and every branch readout of the parent class works.
+
+    Compartment states are the causal convolutions z_t = sum_l A^l b x_{t-l};
+    the K-dimensional kernels A^l b are built by recursion and applied with
+    the same template FFT as the diagonal model. Only the parallel FFT path is
+    supported (integration_backend='fft', step_mode='m').
+    """
+
+    def __init__(self, *args, coupling_init_ratio: float = 0.1, **kwargs):
+        super().__init__(*args, **kwargs)
+        if not 0.0 < coupling_init_ratio < 1.0:
+            raise ValueError("coupling_init_ratio must be in (0, 1)")
+        if (
+            self.integration_backend != "fft"
+            or not self.parallel_forward
+            or self.detach_state_during_forward
+            or self.free_window_order is not None
+            or self.no_filter
+        ):
+            raise ValueError(
+                "ChainCoupledSparseDendCompartment requires integration_backend='fft', "
+                "parallel_forward=True, detach_state_during_forward=False, "
+                "free_window_order=None and no_filter=False"
+            )
+        self.coupling_init_ratio = float(coupling_init_ratio)
+        init_logit = math.log(coupling_init_ratio / (1.0 - coupling_init_ratio))
+        self.coupling_logits = nn.Parameter(
+            torch.full((self.num_branches, self.compartments_per_branch - 1), init_logit)
+        )
+
+    def coupling_strength(self, dtype=torch.float32, device=None):
+        """Return (c [B, K-1], c_max [B, K-1]) for every branch template."""
+        device = self.coupling_logits.device if device is None else device
+        tau = torch.clamp(self.tau_compartments.to(dtype=dtype, device=device), min=1.0 + 1e-3)
+        decay = (1.0 - 1.0 / tau).detach()
+        c_max = torch.minimum(decay[:, :-1], decay[:, 1:]) / 4.0
+        c = c_max * torch.sigmoid(self.coupling_logits.to(dtype=dtype, device=device))
+        return c, c_max
+
+    def transition_matrix(self, dtype=torch.float32, device=None):
+        """A_j = I - diag(1/tau_j) - L(c_j), shape [B, K, K]."""
+        device = self.coupling_logits.device if device is None else device
+        K = self.compartments_per_branch
+        tau = torch.clamp(self.tau_compartments.to(dtype=dtype, device=device), min=1.0 + 1e-3)
+        c, _ = self.coupling_strength(dtype, device)
+        zeros = torch.zeros_like(c[:, :1])
+        degree = torch.cat([zeros, c], dim=1) + torch.cat([c, zeros], dim=1)   # c_{k-1,k} + c_{k,k+1}
+        eye = torch.eye(K, dtype=dtype, device=device)
+        A = eye * (1.0 - 1.0 / tau - degree).unsqueeze(-1)
+        A = A + torch.diag_embed(c, offset=1) + torch.diag_embed(c, offset=-1)
+        return A
+
+    def _template_compartment_input_gain(self, dtype, device):
+        """q_j of Eq. 4 per branch template, shape [B, K]."""
+        if not self.learn_comp_gain:
+            return torch.ones(self.num_branches, self.compartments_per_branch, dtype=dtype, device=device)
+        raw = F.softplus(self.compartment_input_logits.to(dtype=dtype, device=device)) + 1e-4
+        return self.compartments_per_branch * raw / raw.sum(dim=-1, keepdim=True).clamp_min(1e-6)
+
+    def _integrate(self, branch_input: torch.Tensor, v_prev: torch.Tensor):
+        raise RuntimeError(
+            "ChainCoupledSparseDendCompartment supports only the parallel FFT "
+            "multi-step path (step_mode='m')"
+        )
+
+    def _parallel_integrate_fft(self, x_seq: torch.Tensor, v_init: torch.Tensor):
+        T = x_seq.shape[0]
+        spatial_dims = x_seq.dim() - 3
+        work_dtype = torch.float64 if x_seq.dtype == torch.float64 else torch.float32
+        device = x_seq.device
+
+        A = self.transition_matrix(work_dtype, device)                       # [B, K, K]
+        tau = torch.clamp(self.tau_compartments.to(dtype=work_dtype, device=device), min=1.0 + 1e-3)
+        q = self._template_compartment_input_gain(work_dtype, device)
+        b = q / tau if self.decay_input else q                               # [B, K]
+
+        # kernel[j, :, l] = A_j^l b_j  (q is mixed by A, so it lives in the kernel)
+        columns = []
+        v = b
+        for _ in range(T):
+            columns.append(v)
+            v = torch.einsum("bkm,bm->bk", A, v)
+        kernel = torch.stack(columns, dim=-1)                                # [B, K, T]
+
+        drive = x_seq.unsqueeze(2).unsqueeze(4)
+        edge_gain = self._edge_channel_weight(work_dtype, device).view(
+            1, self.branch_degree, self.channels, 1, *([1] * spatial_dims), 1
+        )
+        state_seq = _causal_fft_template_convolution_time_first(
+            drive, kernel, self._edge_index(device), edge_gain,
+        )
+
+        # A carried state (no reset between calls) propagates as A^{t+1} h0.
+        zero_init = (
+            (isinstance(self.v, float) and self.v == self.v_rest)
+            or (torch.is_tensor(self.v) and self.v.shape != v_init.shape)
+        )
+        if not zero_init:
+            A_edge = self._edge_branch_value(A).view(
+                1, self.branch_degree, self.channels,
+                self.compartments_per_branch, self.compartments_per_branch,
+                *([1] * spatial_dims),
+            ).to(dtype=state_seq.dtype)
+            h = (v_init - self.v_rest).to(dtype=state_seq.dtype)
+            init_terms = []
+            for _ in range(T):
+                h = (A_edge * h.unsqueeze(3)).sum(dim=4)
+                init_terms.append(h)
+            state_seq = state_seq + torch.stack(init_terms, dim=0)
+        return state_seq + self.v_rest
+
+
