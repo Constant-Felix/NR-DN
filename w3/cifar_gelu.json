@@ -1,0 +1,14 @@
+{
+  "ms_per_iter_mean": 85.6792984008789,
+  "ms_per_iter_std": 0.30645841360092163,
+  "peak_memory_allocated_gb": 6.629181861877441,
+  "peak_memory_reserved_gb": 7.806640625,
+  "warmup": 20,
+  "iters": 100,
+  "parameters": 3564682,
+  "task": "cifar",
+  "variant": "standard",
+  "batch_size": 50,
+  "amp": false,
+  "gpu": "NVIDIA GeForce RTX 5090"
+}

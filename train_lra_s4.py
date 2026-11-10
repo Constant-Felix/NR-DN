@@ -551,6 +551,85 @@ def run_epoch(
     return total_loss / total_seen, 100.0 * total_correct / total_seen
 
 
+def benchmark_training_step(
+    model: nn.Module,
+    loader,
+    criterion: nn.Module,
+    optimizer: optim.Optimizer,
+    scaler: Optional[amp.GradScaler],
+    device: torch.device,
+    warmup: int,
+    iters: int,
+    seed: int,
+) -> dict:
+    """Rebuttal W3 (Table R1-3): training time per iteration and peak GPU memory.
+
+    One iteration = forward + loss + backward + optimizer step, exactly as in
+    run_epoch. The first ``warmup + iters`` training batches are drawn with a
+    fixed seed and moved to the GPU beforehand, so every model is timed on the
+    same batches and data loading is excluded. Peak memory is the maximum
+    allocated during the timed iterations (parameters, optimizer states and
+    activations included).
+    """
+    if device.type != "cuda":
+        raise RuntimeError("--benchmark-iters requires a CUDA device")
+    model.train()
+    total = warmup + iters
+    torch.manual_seed(seed)  # same shuffle order for every model
+    batches = []
+    while len(batches) < total:
+        before = len(batches)
+        for batch in loader:
+            batches.append(unpack_batch(batch, device))
+            if len(batches) == total:
+                break
+        if len(batches) == before:
+            raise RuntimeError("the training loader yielded no batches")
+
+    def step(inputs, targets, lengths):
+        with amp.autocast(enabled=scaler is not None):
+            logits = model(inputs, lengths=lengths)
+            loss = criterion(logits, targets)
+        optimizer.zero_grad(set_to_none=True)
+        if scaler is None:
+            loss.backward()
+            optimizer.step()
+        else:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+
+    # Without torchrun the current CUDA device stays cuda:0 even if the model
+    # lives on e.g. cuda:3, so time on the model's device and its stream.
+    with torch.cuda.device(device):
+        stream = torch.cuda.current_stream(device)
+        for batch in batches[:warmup]:
+            step(*batch)
+        torch.cuda.synchronize(device)
+        torch.cuda.reset_peak_memory_stats(device)
+
+        events = []
+        for batch in batches[warmup:]:
+            start = torch.cuda.Event(enable_timing=True)
+            end = torch.cuda.Event(enable_timing=True)
+            start.record(stream)
+            step(*batch)
+            end.record(stream)
+            events.append((start, end))
+        torch.cuda.synchronize(device)
+        events[-1][1].synchronize()
+        times = torch.tensor([start.elapsed_time(end) for start, end in events])
+    return {
+        "ms_per_iter_mean": times.mean().item(),
+        "ms_per_iter_std": times.std().item() if len(times) > 1 else 0.0,
+        "peak_memory_allocated_gb": torch.cuda.max_memory_allocated(device) / 1024**3,
+        "peak_memory_reserved_gb": torch.cuda.max_memory_reserved(device) / 1024**3,
+        "warmup": warmup,
+        "iters": iters,
+        "parameters": sum(p.numel() for p in model.parameters() if p.requires_grad),
+    }
+
+
 def save_checkpoint(state: dict, output_dir: Path, is_best: bool) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     latest = output_dir / "checkpoint.pth.tar"
@@ -558,7 +637,7 @@ def save_checkpoint(state: dict, output_dir: Path, is_best: bool) -> None:
     if is_best:
         torch.save(state, output_dir / "model_best.pth.tar")
 
-# python train_lra_s4.py --task imdb --device cuda:0 --soma-lr 0.001 --dend-lr 0.001 --soma-type psn_integer_ssf --resume /data2/hyx/ViT-dend2/exp/lra-new-cifar-dend_soma-gelu-2026-09-23-04-02-51/checkpoint.pth.tar --output-dir /data2/hyx/ViT-dend2/exp/lra-new-cifar-dend_soma-gelu-2026-09-23-04-02-51
+# python train_lra_s4.py --task listops --activation dend_soma --soma-only --soma-type masked_sliding_psn --soma-lr 0.001 --benchmark-json w3/listops_spsn.json --device cuda:3 --benchmark-iters 100 --benchmark-warmup 20      --soma-lr 0.001 --dend-lr 0.001 --soma-type psn_integer_ssf --resume /data2/hyx/ViT-dend2/exp/lra-new-cifar-dend_soma-gelu-2026-09-23-04-02-51/checkpoint.pth.tar --output-dir /data2/hyx/ViT-dend2/exp/lra-new-cifar-dend_soma-gelu-2026-09-23-04-02-51
 # CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 torchrun --standalone --nproc-per-node=8  train_lra_s4.py --task pathx  --soma-lr 0.001 --dend-lr 0.001 --soma-type psn_integer_ssf --soma-ssf-L 0  --soma-ssf-thre 4       --resume /data2/hyx/ViT-dend2/exp/lra-new-pathx-dend_soma-gelu-2026-09-20-03-52-24/checkpoint.pth.tar --output-dir /data2/hyx/ViT-dend2/exp/lra-new-pathx-dend_soma-gelu-2026-09-20-03-52-24
 # CUDA_VISIBLE_DEVICES=4,5,6,7 torchrun --standalone --nproc-per-node=4 train_lra_s4.py --task aan --device cuda --soma-lr 0.001 --dend-lr 0.001 --soma-type psn_integer_ssf --recipe s4_v3 --batch-size 16      --lr 0.01   --dend-compartments 2
 def parse_args():
@@ -771,7 +850,7 @@ def parse_args():
     parser.add_argument(
         "--soma-ssf-L",
         type=int,
-        default=0,
+        default=-4,
         help="Signed SSF lower level for psn_integer_ssf.",
     )
     parser.add_argument(
@@ -792,11 +871,27 @@ def parse_args():
             "enabled for DEND+SOMA under mmdend_s4 and s4_v3."
         ),
     )
+    # Rebuttal W3 (Table R1-3): efficiency measurement
+    parser.add_argument(
+        "--soma-only",
+        action="store_true",
+        help="Drop the dendrite inside each DEND+SOMA activation (S4-SPSN with --soma-type masked_sliding_psn).",
+    )
+    parser.add_argument(
+        "--benchmark-iters",
+        type=int,
+        default=0,
+        help="If > 0, time this many training iterations (after --benchmark-warmup), report time/iter and peak GPU memory, and exit without training.",
+    )
+    parser.add_argument("--benchmark-warmup", type=int, default=20)
+    parser.add_argument("--benchmark-json", default="", help="Optional path to save the W3 measurements as JSON.")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
+    if args.soma_only and (args.activation != "dend_soma" or args.recipe == "spikingssm_pathx"):
+        raise ValueError("--soma-only requires --activation dend_soma and the mmdend_s4 or s4_v3 recipe")
     s4_root = Path(args.s4_root).expanduser()
     if s4_root.is_dir() and str(s4_root) not in sys.path:
         sys.path.insert(0, str(s4_root))
@@ -997,6 +1092,7 @@ def main() -> None:
     else:
         if args.activation == "dend_soma":
             model_overrides.update(dend_soma_overrides)
+            model_overrides["dend_soma_use_dend"] = not args.soma_only
             model_overrides["dend_soma_activation_target"] = (
                 args.dend_soma_target
             )
@@ -1058,6 +1154,26 @@ def main() -> None:
         args.num_warmup_steps,
     )
     scaler = amp.GradScaler() if args.amp and device.type == "cuda" else None
+
+    if args.benchmark_iters > 0:
+        if distributed:
+            raise ValueError("--benchmark-iters measures a single GPU; run it without torchrun")
+        result = benchmark_training_step(
+            model, loaders["train"], criterion, optimizer, scaler, device,
+            args.benchmark_warmup, args.benchmark_iters, args.seed,
+        )
+        variant = (
+            "standard" if args.activation == "standard"
+            else f"dend_soma(soma_only={args.soma_only}, soma={args.soma_type}, W={args.soma_psn_order}, "
+                 f"checkpoint={args.dend_soma_activation_checkpoint})"
+        )
+        result.update(task=task_key, variant=variant, batch_size=args.batch_size, amp=bool(args.amp),
+                      gpu=torch.cuda.get_device_name(device))
+        print(json.dumps(result, indent=2))
+        if args.benchmark_json:
+            Path(args.benchmark_json).parent.mkdir(parents=True, exist_ok=True)
+            Path(args.benchmark_json).write_text(json.dumps(result, indent=2))
+        return
 
     if distributed:
         model = DDP(

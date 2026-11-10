@@ -65,6 +65,7 @@ class S4LRAConfig:
     dend_soma_ssf_thre: int = 4
     dend_soma_ssf_L: int = 0
     dend_soma_activation_checkpoint: bool = True
+    dend_soma_use_dend: bool = True
     backend: str = "official"
 
 
@@ -273,6 +274,7 @@ class DendSomaS4Activation(nn.Module):
         ssf_thre: int = 4,
         ssf: bool = True,  ##
         activation_checkpoint: bool = True,
+        use_dend: bool = True,
     ) -> None:
         super().__init__()
         SparseChannelPreservingTrunkDistalDendCompartment = load_local_class(
@@ -297,7 +299,10 @@ class DendSomaS4Activation(nn.Module):
         self.transposed = transposed
         self.soma_type = soma_type
         self.activation_checkpoint = bool(activation_checkpoint)
-        self.dend = SparseChannelPreservingTrunkDistalDendCompartment(
+        # use_dend=False drops the dendrite (rebuttal W3: S4-SPSN = soma-only
+        # with soma_type="masked_sliding_psn").
+        self.use_dend = bool(use_dend)
+        self.dend = None if not self.use_dend else SparseChannelPreservingTrunkDistalDendCompartment(
             channels=d_model,
             num_branches=num_branches,
             compartments_per_branch=compartments_per_branch,
@@ -344,8 +349,9 @@ class DendSomaS4Activation(nn.Module):
         # Reset inside the checkpointed region so backward recomputation starts
         # from the same zero-state trajectory as the original forward pass.
         self._reset_state()
+        if self.dend is None:  # soma-only (S4-SPSN)
+            return self.soma(x_seq)
         return self.soma(self.dend(x_seq))
-        #return self.soma(x_seq)
 
     def _apply_time_first(self, x_seq: Tensor) -> Tensor:
         if (
@@ -465,6 +471,7 @@ class StandardS4Block(nn.Module):
         dend_soma_ssf_thre: int = 4,
         dend_soma_ssf_L: int = 0,
         dend_soma_activation_checkpoint: bool = True,
+        dend_soma_use_dend: bool = True,
         s4_layer_factory: Optional[S4LayerFactory] = None,
     ) -> None:
         super().__init__()
@@ -528,6 +535,7 @@ class StandardS4Block(nn.Module):
                 "ssf_thre": dend_soma_ssf_thre,
                 "ssf_L": dend_soma_ssf_L,
                 "activation_checkpoint": dend_soma_activation_checkpoint,
+                "use_dend": dend_soma_use_dend,
             }
 
             def make_dend_soma_activation() -> DendSomaS4Activation:
@@ -654,6 +662,7 @@ class StandardS4ForLRA(nn.Module):
         dend_soma_ssf_thre: int = 4,
         dend_soma_ssf_L: int = 0,
         dend_soma_activation_checkpoint: bool = True,
+        dend_soma_use_dend: bool = True,
         backend: str = "official",
     ) -> None:
         super().__init__()
@@ -714,6 +723,7 @@ class StandardS4ForLRA(nn.Module):
             dend_soma_ssf_thre=dend_soma_ssf_thre,
             dend_soma_ssf_L=dend_soma_ssf_L,
             dend_soma_activation_checkpoint=dend_soma_activation_checkpoint,
+            dend_soma_use_dend=dend_soma_use_dend,
             backend=backend,
         )
 
@@ -753,6 +763,7 @@ class StandardS4ForLRA(nn.Module):
                     dend_soma_ssf_thre=dend_soma_ssf_thre,
                     dend_soma_ssf_L=dend_soma_ssf_L,
                     dend_soma_activation_checkpoint=dend_soma_activation_checkpoint,
+                    dend_soma_use_dend=dend_soma_use_dend,
                     s4_layer_factory=s4_layer_factory,
                 )
                 for _ in range(n_layers)

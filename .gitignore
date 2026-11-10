@@ -1,4 +1,5 @@
 output/
+w3/
 strip_linear_readout.py
 check_soma_equiv.py
 exp/

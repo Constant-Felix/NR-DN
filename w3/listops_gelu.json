@@ -1,0 +1,14 @@
+{
+  "ms_per_iter_mean": 48.00160598754883,
+  "ms_per_iter_std": 7.584723949432373,
+  "peak_memory_allocated_gb": 2.8435144424438477,
+  "peak_memory_reserved_gb": 6.42578125,
+  "warmup": 20,
+  "iters": 100,
+  "parameters": 280170,
+  "task": "listops",
+  "variant": "standard",
+  "batch_size": 32,
+  "amp": false,
+  "gpu": "NVIDIA GeForce RTX 5090"
+}

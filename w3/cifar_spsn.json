@@ -1,0 +1,14 @@
+{
+  "ms_per_iter_mean": 136.4402618408203,
+  "ms_per_iter_std": 0.8177481889724731,
+  "peak_memory_allocated_gb": 7.140302658081055,
+  "peak_memory_reserved_gb": 8.306640625,
+  "warmup": 20,
+  "iters": 100,
+  "parameters": 3564712,
+  "task": "cifar",
+  "variant": "dend_soma(soma_only=True, soma=masked_sliding_psn, W=4, checkpoint=True)",
+  "batch_size": 50,
+  "amp": false,
+  "gpu": "NVIDIA GeForce RTX 5090"
+}

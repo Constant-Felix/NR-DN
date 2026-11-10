@@ -199,7 +199,7 @@ class BaseDendCompartment(base.MemoryModule, abc.ABC):
                 f"but get {self.step_mode} instead."
             )
 
-BRANCH_READOUT_MODES = ("trunk_distal", "linear", "linear_act", "glu", "swiglu", "mlp")
+BRANCH_READOUT_MODES = ("trunk_distal", "linear", "linear_act", "glu", "swiglu", "mlp", "proximal")
 READOUT_ACTIVATIONS = {
     "gelu": F.gelu,
     "tanh": torch.tanh,
@@ -235,6 +235,8 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
     * ``"swiglu"``:     R = (w1^T z + b1) * SiLU(w2^T z + b2)
     * ``"mlp"``:        R = w2^T sigmoid(W1 z + b1) + b2, hidden width
       ``readout_mlp_hidden``
+    * ``"proximal"``:   R = s * z_0, i.e. DMPR with the modulation disabled
+      (m = 0 in Eq. 10; rebuttal R2-Q2). Distal compartments are unused.
 
     Every readout feeds the same somatic input I = output_scale * R
     + input_residual_scale * X (Eq. 11).
@@ -421,6 +423,9 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
             self.readout_hidden_bias = uniform(B, H, fan_in=K)          # b1
             self.readout_out_weight = uniform(B, H, fan_in=H)           # w2
             self.readout_out_bias = uniform(B, fan_in=H)                # b2
+        elif mode == "proximal":
+            # same s_j (branch strength) and initialization as DMPR
+            self.branch_strength = nn.Parameter(torch.ones(B))
         else:
             raise ValueError(f"no readout parameters for mode {mode!r}")
 
@@ -928,6 +933,9 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
             w2 = routed(self.readout_out_weight).view(1, d, C, H, *spatial)
             b2 = routed(self.readout_out_bias).view(1, d, C, *spatial)
             y = (hidden * w2).sum(dim=3) + b2
+        elif mode == "proximal":
+            # DMPR with m = 0: R = s_j * z_0
+            y = routed(self.branch_strength).view(1, d, C, *spatial) * state[:, :, :, 0, ...]
         else:
             raise ValueError(f"unknown branch_readout_mode {mode!r}")
 
