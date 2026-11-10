@@ -614,7 +614,7 @@ def evaluate_checkpoint(model, test_loader, args, gpu):
 
 # python train_ssc.py --task SSC --device cuda:0 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1 --readout proximal        --epochs 400 --workers 16 --cos   --optim sgd    --lr 0.1
 # python train_ssc.py --task SSC --device cuda:6 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1
-# python train_ssc.py --eval-only --checkpoint <results_dir>/model_best.pth.tar --task SSC --ssc-preprocess asrc --ssc-soma psn --ssc-n-bins 1 --device cuda:6
+# python train_ssc.py --eval-only --checkpoint exp/SSCff-2026-11-09-16-48-16/model_best.pth.tar --task SSC --ssc-preprocess asrc --ssc-soma psn --ssc-n-bins 1 --device cuda:7 --dmpr-stats
 # python train_ssc.py --task SHD --device cuda:1 --lr 0.005 --data-root /data/hyx/ViT-dend/data/shd/data_shd --wd 5e-4 --cos
 
 parser = argparse.ArgumentParser(description='Sequential SHD/SSC')
@@ -658,6 +658,15 @@ parser.add_argument('--proximal', default='fastest', choices=list(PROXIMAL_TAU_S
                     help='which compartment (by initial tau) is proximal in each branch (ff_SSC only)')
 parser.add_argument('--coupling', default='none', choices=list(COUPLINGS),
                     help='none: diagonal A; chain: symmetric tridiagonal A (ff_SSC only)')
+# Rebuttal analyses of a trained model (use with --eval-only --checkpoint):
+# R3-Q2 DMPR statistics (Table R3-2) and R2-W1 distal stimulation (Table R2-1)
+parser.add_argument('--dmpr-stats', action='store_true', default=False,
+                    help='with --eval-only: learned gamma/rho and |m| statistics instead of evaluation')
+parser.add_argument('--distal-stim', action='store_true', default=False,
+                    help='with --eval-only: in-silico distal stimulation instead of evaluation')
+parser.add_argument('--stim-samples', default=1024, type=int, help='number of test samples used by --distal-stim')
+parser.add_argument('--stim-fraction', default=0.1, type=float, help='share of neurons stimulated per subset')
+parser.add_argument('--stim-subsets', default=5, type=int, help='number of random neuron subsets per layer')
 parser.add_argument('--ssc-soma', '--model-version', dest='ssc_soma',
                     default='psn', type=str.lower, choices=['psn', 'src', 'asrc'],
                     help='SSC soma: current parallel PSN, fixed-skip SRC-LIF, or adaptive-skip ASRC-LIF')
@@ -857,9 +866,32 @@ else:
         ).to(gpu)
 n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"number of params: {n_parameters}")
+if (args.dmpr_stats or args.distal_stim) and not args.eval_only:
+    raise ValueError("--dmpr-stats/--distal-stim require --eval-only --checkpoint")
 if args.eval_only:
     logging.info(str(args))
-    evaluate_checkpoint(model, test_loader, args, gpu)
+    if args.dmpr_stats or args.distal_stim:
+        # Rebuttal analyses of a trained model; no evaluation or training is run
+        import distal_stimulation
+        checkpoint = torch.load(args.checkpoint, map_location=gpu, weights_only=False)
+        model.load_state_dict(checkpoint['state_dict'])
+
+        def make_batches():
+            test_loader.reset()
+            for images, _ in test_loader:
+                yield images.to(gpu, dtype=torch.float32, non_blocking=True)
+
+        if args.dmpr_stats:  # Table R3-2, whole test set
+            stats = distal_stimulation.run_dmpr_statistics(model, make_batches)
+            distal_stimulation.save_and_print_stats(stats, os.path.join(args.results_dir, 'dmpr_stats.json'))
+        if args.distal_stim:  # Table R2-1
+            result = distal_stimulation.run_distal_stimulation(
+                model, make_batches, max_samples=args.stim_samples,
+                fraction=args.stim_fraction, n_subsets=args.stim_subsets,
+            )
+            distal_stimulation.save_and_print(result, os.path.join(args.results_dir, 'distal_stim.json'))
+    else:
+        evaluate_checkpoint(model, test_loader, args, gpu)
     sys.exit(0)
 _asrc_container = getattr(soma, 'adskip_RecurrentContainer', None)
 asrc_soma_modules = [

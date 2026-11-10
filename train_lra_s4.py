@@ -884,6 +884,12 @@ def parse_args():
         help="If > 0, time this many training iterations (after --benchmark-warmup), report time/iter and peak GPU memory, and exit without training.",
     )
     parser.add_argument("--benchmark-warmup", type=int, default=20)
+    parser.add_argument(
+        "--dend-readout",
+        default="trunk_distal",
+        choices=["trunk_distal", "linear", "linear_act", "glu", "swiglu", "mlp", "proximal"],
+        help="Branch readout of the dendrite (trunk_distal = DMPR); see module/dend_compartment.py.",
+    )
     parser.add_argument("--benchmark-json", default="", help="Optional path to save the W3 measurements as JSON.")
     return parser.parse_args()
 
@@ -1093,6 +1099,7 @@ def main() -> None:
         if args.activation == "dend_soma":
             model_overrides.update(dend_soma_overrides)
             model_overrides["dend_soma_use_dend"] = not args.soma_only
+            model_overrides["dend_soma_branch_readout_mode"] = args.dend_readout
             model_overrides["dend_soma_activation_target"] = (
                 args.dend_soma_target
             )
@@ -1164,7 +1171,7 @@ def main() -> None:
         )
         variant = (
             "standard" if args.activation == "standard"
-            else f"dend_soma(soma_only={args.soma_only}, soma={args.soma_type}, W={args.soma_psn_order}, "
+            else f"dend_soma(soma_only={args.soma_only}, readout={args.dend_readout}, soma={args.soma_type}, W={args.soma_psn_order}, "
                  f"checkpoint={args.dend_soma_activation_checkpoint})"
         )
         result.update(task=task_key, variant=variant, batch_size=args.batch_size, amp=bool(args.amp),

@@ -295,7 +295,7 @@ class CIFAR10Net(nn.Module):
         x_seq = self.fc(self.conv(x_seq))  # [W, N, C]
         return x_seq.mean(0)
 
-# python train_seq.py -data-dir /data2/hyx/ViT-dend/data/cifar100 -amp -class-num 100 -channels 128  -warmup-epochs 0  -epochs 400 -opt adamw -lr 0.001 -coupling chain   -resume logs/pt/None_e400_b128_adamw_lr0.001_c128_20261016-060357_amp_P32/checkpoint_latest.pth
+# python train_seq.py -data-dir /data2/hyx/ViT-dend/data/cifar100 -amp -class-num 100 -channels 128  -warmup-epochs 0  -epochs 400 -opt adamw -lr 0.001 -dmpr-stats exp/pt/None_e400_b128_adamw_lr0.001_c128_20261110-045305_amp_coup-chain_P32/checkpoint_max.pth -coupling chain   -resume logs/pt/None_e400_b128_adamw_lr0.001_c128_20261016-060357_amp_P32/checkpoint_latest.pth
 
 from datetime import datetime
 def main():
@@ -337,6 +337,12 @@ def main():
     # Rebuttal W5 (Tables R1-6 / R1-7): proximal compartment and intra-branch coupling
     parser.add_argument('-proximal', default='fastest', choices=list(PROXIMAL_TAU_SCALE), help='which compartment (by initial tau) is proximal in each branch')
     parser.add_argument('-coupling', default='none', choices=list(COUPLINGS), help='none: diagonal A; chain: symmetric tridiagonal A')
+    # Rebuttal analyses of a trained model (no training): R3-Q2 DMPR statistics, R2-W1 distal stimulation
+    parser.add_argument('-dmpr-stats', type=str, default='', help='checkpoint (checkpoint_max.pth): learned gamma/rho and |m| statistics (Table R3-2)')
+    parser.add_argument('-distal-stim', type=str, default='', help='checkpoint (checkpoint_max.pth): in-silico distal stimulation (Table R2-1)')
+    parser.add_argument('-stim-samples', default=1024, type=int, help='number of test samples used by -distal-stim')
+    parser.add_argument('-stim-fraction', default=0.1, type=float, help='share of neurons stimulated per subset')
+    parser.add_argument('-stim-subsets', default=5, type=int, help='number of random neuron subsets per layer')
 
 
     args = parser.parse_args()
@@ -453,6 +459,32 @@ def main():
     net.to(args.device)
     n_parameters = sum(p.numel() for p in net.parameters() if p.requires_grad)
     print(f"number of params: {n_parameters}")
+
+    if args.dmpr_stats or args.distal_stim:
+        # Rebuttal analyses of a trained model; no training is run
+        import distal_stimulation
+        if args.dmpr_stats and args.distal_stim and os.path.abspath(args.dmpr_stats) != os.path.abspath(args.distal_stim):
+            raise ValueError('-dmpr-stats and -distal-stim must point to the same checkpoint')
+        ckpt_path = os.path.abspath(args.dmpr_stats or args.distal_stim)
+        checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+        net.load_state_dict(checkpoint['net'])
+
+        def make_batches():
+            for img, _ in test_data_loader:
+                yield img.to(args.device, non_blocking=True)
+
+        if args.dmpr_stats:  # Table R3-2, whole test set
+            stats = distal_stimulation.run_dmpr_statistics(net, make_batches)
+            distal_stimulation.save_and_print_stats(stats, os.path.join(os.path.dirname(ckpt_path), 'dmpr_stats.json'))
+        if args.distal_stim:  # Table R2-1
+            result = distal_stimulation.run_distal_stimulation(
+                net, make_batches, max_samples=args.stim_samples,
+                fraction=args.stim_fraction, n_subsets=args.stim_subsets,
+            )
+            distal_stimulation.save_and_print(result, os.path.join(os.path.dirname(ckpt_path), 'distal_stim.json'))
+        if os.path.isdir(pt_dir) and not os.listdir(pt_dir):
+            os.rmdir(pt_dir)  # created above for training only
+        return
 
     scaler = None
     if args.amp:

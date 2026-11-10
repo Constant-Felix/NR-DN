@@ -1,6 +1,6 @@
 {
-  "ms_per_iter_mean": 136.4402618408203,
-  "ms_per_iter_std": 0.8177481889724731,
+  "ms_per_iter_mean": 135.62013244628906,
+  "ms_per_iter_std": 0.41321319341659546,
   "peak_memory_allocated_gb": 7.140302658081055,
   "peak_memory_reserved_gb": 8.306640625,
   "warmup": 20,

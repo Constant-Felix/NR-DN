@@ -66,6 +66,7 @@ class S4LRAConfig:
     dend_soma_ssf_L: int = 0
     dend_soma_activation_checkpoint: bool = True
     dend_soma_use_dend: bool = True
+    dend_soma_branch_readout_mode: str = "trunk_distal"
     backend: str = "official"
 
 
@@ -472,6 +473,7 @@ class StandardS4Block(nn.Module):
         dend_soma_ssf_L: int = 0,
         dend_soma_activation_checkpoint: bool = True,
         dend_soma_use_dend: bool = True,
+        dend_soma_branch_readout_mode: str = "trunk_distal",
         s4_layer_factory: Optional[S4LayerFactory] = None,
     ) -> None:
         super().__init__()
@@ -536,6 +538,7 @@ class StandardS4Block(nn.Module):
                 "ssf_L": dend_soma_ssf_L,
                 "activation_checkpoint": dend_soma_activation_checkpoint,
                 "use_dend": dend_soma_use_dend,
+                "branch_readout_mode": dend_soma_branch_readout_mode,
             }
 
             def make_dend_soma_activation() -> DendSomaS4Activation:
@@ -663,6 +666,7 @@ class StandardS4ForLRA(nn.Module):
         dend_soma_ssf_L: int = 0,
         dend_soma_activation_checkpoint: bool = True,
         dend_soma_use_dend: bool = True,
+        dend_soma_branch_readout_mode: str = "trunk_distal",
         backend: str = "official",
     ) -> None:
         super().__init__()
@@ -724,6 +728,7 @@ class StandardS4ForLRA(nn.Module):
             dend_soma_ssf_L=dend_soma_ssf_L,
             dend_soma_activation_checkpoint=dend_soma_activation_checkpoint,
             dend_soma_use_dend=dend_soma_use_dend,
+            dend_soma_branch_readout_mode=dend_soma_branch_readout_mode,
             backend=backend,
         )
 
@@ -764,6 +769,7 @@ class StandardS4ForLRA(nn.Module):
                     dend_soma_ssf_L=dend_soma_ssf_L,
                     dend_soma_activation_checkpoint=dend_soma_activation_checkpoint,
                     dend_soma_use_dend=dend_soma_use_dend,
+                    dend_soma_branch_readout_mode=dend_soma_branch_readout_mode,
                     s4_layer_factory=s4_layer_factory,
                 )
                 for _ in range(n_layers)
