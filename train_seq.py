@@ -343,6 +343,9 @@ def main():
     parser.add_argument('-dmpr-stats', type=str, default='', help='checkpoint (checkpoint_max.pth): learned gamma/rho and |m| statistics (Table R3-2)')
     parser.add_argument('-distal-stim', type=str, default='', help='checkpoint (checkpoint_max.pth): in-silico distal stimulation (Table R2-1)')
     parser.add_argument('-stim-samples', default=1024, type=int, help='number of test samples used by -distal-stim')
+    # Rebuttal R4-Q5 (Table R4-5): firing rate, SOPs, MACs and energy of a trained model
+    parser.add_argument('-spike-stats', type=str, default='', help='checkpoint (checkpoint_max.pth): spiking statistics (Table R4-5)')
+    parser.add_argument('-spike-samples', default=None, type=int, help='number of test samples used by -spike-stats (default: whole test set)')
     parser.add_argument('-stim-fraction', default=0.1, type=float, help='share of neurons stimulated per subset')
     parser.add_argument('-stim-subsets', default=5, type=int, help='number of random neuron subsets per layer')
 
@@ -464,12 +467,13 @@ def main():
     n_parameters = sum(p.numel() for p in net.parameters() if p.requires_grad)
     print(f"number of params: {n_parameters}")
 
-    if args.dmpr_stats or args.distal_stim:
+    if args.dmpr_stats or args.distal_stim or args.spike_stats:
         # Rebuttal analyses of a trained model; no training is run
         import distal_stimulation
-        if args.dmpr_stats and args.distal_stim and os.path.abspath(args.dmpr_stats) != os.path.abspath(args.distal_stim):
-            raise ValueError('-dmpr-stats and -distal-stim must point to the same checkpoint')
-        ckpt_path = os.path.abspath(args.dmpr_stats or args.distal_stim)
+        ckpt_paths = {os.path.abspath(p) for p in (args.dmpr_stats, args.distal_stim, args.spike_stats) if p}
+        if len(ckpt_paths) > 1:
+            raise ValueError('-dmpr-stats, -distal-stim and -spike-stats must point to the same checkpoint')
+        ckpt_path = ckpt_paths.pop()
         checkpoint = torch.load(ckpt_path, map_location='cpu', weights_only=False)
         net.load_state_dict(checkpoint['net'])
 
@@ -486,6 +490,10 @@ def main():
                 fraction=args.stim_fraction, n_subsets=args.stim_subsets,
             )
             distal_stimulation.save_and_print(result, os.path.join(os.path.dirname(ckpt_path), 'distal_stim.json'))
+        if args.spike_stats:  # Table R4-5
+            import spike_stats
+            result = spike_stats.run_spike_statistics(net, make_batches, max_samples=args.spike_samples)
+            spike_stats.save_and_print(result, os.path.join(os.path.dirname(ckpt_path), 'spike_stats.json'))
         if os.path.isdir(pt_dir) and not os.listdir(pt_dir):
             os.rmdir(pt_dir)  # created above for training only
         return

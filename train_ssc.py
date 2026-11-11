@@ -669,6 +669,11 @@ parser.add_argument('--dmpr-stats', action='store_true', default=False,
 parser.add_argument('--distal-stim', action='store_true', default=False,
                     help='with --eval-only: in-silico distal stimulation instead of evaluation')
 parser.add_argument('--stim-samples', default=1024, type=int, help='number of test samples used by --distal-stim')
+# Rebuttal R4-Q5 (Table R4-5): firing rate, SOPs, MACs and energy (use with --eval-only --checkpoint)
+parser.add_argument('--spike-stats', action='store_true', default=False,
+                    help='with --eval-only: spiking statistics instead of evaluation')
+parser.add_argument('--spike-samples', default=None, type=int,
+                    help='number of test samples used by --spike-stats (default: whole test set)')
 parser.add_argument('--stim-fraction', default=0.1, type=float, help='share of neurons stimulated per subset')
 parser.add_argument('--stim-subsets', default=5, type=int, help='number of random neuron subsets per layer')
 parser.add_argument('--ssc-soma', '--model-version', dest='ssc_soma',
@@ -875,11 +880,11 @@ else:
         ).to(gpu)
 n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)
 print(f"number of params: {n_parameters}")
-if (args.dmpr_stats or args.distal_stim) and not args.eval_only:
-    raise ValueError("--dmpr-stats/--distal-stim require --eval-only --checkpoint")
+if (args.dmpr_stats or args.distal_stim or args.spike_stats) and not args.eval_only:
+    raise ValueError("--dmpr-stats/--distal-stim/--spike-stats require --eval-only --checkpoint")
 if args.eval_only:
     logging.info(str(args))
-    if args.dmpr_stats or args.distal_stim:
+    if args.dmpr_stats or args.distal_stim or args.spike_stats:
         # Rebuttal analyses of a trained model; no evaluation or training is run
         import distal_stimulation
         checkpoint = torch.load(args.checkpoint, map_location=gpu, weights_only=False)
@@ -899,6 +904,10 @@ if args.eval_only:
                 fraction=args.stim_fraction, n_subsets=args.stim_subsets,
             )
             distal_stimulation.save_and_print(result, os.path.join(args.results_dir, 'distal_stim.json'))
+        if args.spike_stats:  # Table R4-5
+            import spike_stats
+            result = spike_stats.run_spike_statistics(model, make_batches, max_samples=args.spike_samples)
+            spike_stats.save_and_print(result, os.path.join(args.results_dir, 'spike_stats.json'))
     else:
         evaluate_checkpoint(model, test_loader, args, gpu)
     sys.exit(0)
