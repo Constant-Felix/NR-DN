@@ -91,7 +91,7 @@ def make_soma(kernel, order, L, thre):
 
 
 class ff_SSC(nn.Module):
-    def __init__(self, in_dim=700, hidden=[128, 128, 128], out_dim=35,drop=0.1,T=250,readout='trunk_distal',readout_act='gelu',L=0,U=1,soma_kernel='free',coupling='none',proximal='fastest'):  ##
+    def __init__(self, in_dim=700, hidden=[128, 128, 128], out_dim=35,drop=0.1,T=250,readout='trunk_distal',readout_act='gelu',L=0,U=1,soma_kernel='free',coupling='none',proximal='fastest',dmpr_ablation='none'):  ##
         super().__init__()
         dend_cls = dend_class(coupling)
         tau_scale = PROXIMAL_TAU_SCALE[proximal]
@@ -99,19 +99,19 @@ class ff_SSC(nn.Module):
         layers += [nn.Linear(in_dim, hidden[0], bias=True),
                    #layer.BatchNorm1d(hidden[0]),
                    nn.Dropout(drop),
-                   dend_cls(channels=hidden[0],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale), 
+                   dend_cls(channels=hidden[0],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale,dmpr_ablation=dmpr_ablation), 
                    #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
                    make_soma(soma_kernel, T, L, U)]
         layers += [nn.Linear(hidden[0], hidden[1], bias=True),
                    #layer.BatchNorm1d(hidden[1]),
                    nn.Dropout(drop),
-                   dend_cls(channels=hidden[1],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale),  
+                   dend_cls(channels=hidden[1],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale,dmpr_ablation=dmpr_ablation),  
                    #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
                    make_soma(soma_kernel, T, L, U)]
         layers += [nn.Linear(hidden[1], hidden[2], bias=True),
                    #layer.BatchNorm1d(hidden[1]),
                    nn.Dropout(drop),
-                   dend_cls(channels=hidden[2],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale),  
+                   dend_cls(channels=hidden[2],num_branches=8,compartments_per_branch=4,branch_degree=1,learn_comp_gain=True,learn_edge_gain=True,merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale,dmpr_ablation=dmpr_ablation),  
                    #soma.MaskedSlidingPSN(order=T,surrogate_function=surrogate.Sigmoid(),exp_init=True)]
                    make_soma(soma_kernel, T, L, U)]
 
@@ -572,6 +572,7 @@ def check_eval_args_against_training(args):
         'soma_kernel': '--soma-kernel',
         'proximal': '--proximal',
         'coupling': '--coupling',
+        'dmpr_ablation': '--dmpr-ablation',
     }
     mismatched = []
     for key, flag in flags.items():
@@ -658,6 +659,9 @@ parser.add_argument('--proximal', default='fastest', choices=list(PROXIMAL_TAU_S
                     help='which compartment (by initial tau) is proximal in each branch (ff_SSC only)')
 parser.add_argument('--coupling', default='none', choices=list(COUPLINGS),
                     help='none: diagonal A; chain: symmetric tridiagonal A (ff_SSC only)')
+# Rebuttal R4-Q4 (Table R4-3): remove one DMPR component of ff_SSC (--readout trunk_distal only)
+parser.add_argument('--dmpr-ablation', default='none', choices=list(dend_compartment.DMPR_ABLATIONS),
+                    help='no_gate: p_k = 1; no_tanh: delta_hat instead of tanh(delta_hat) (ff_SSC only)')
 # Rebuttal analyses of a trained model (use with --eval-only --checkpoint):
 # R3-Q2 DMPR statistics (Table R3-2) and R2-W1 distal stimulation (Table R2-1)
 parser.add_argument('--dmpr-stats', action='store_true', default=False,
@@ -707,6 +711,8 @@ if ((args.L, args.U) != (0, 1) or args.soma_kernel != 'free') and (args.task.upp
     raise ValueError("--L/--U/--soma-kernel are only wired into ff_SSC (--task SSC --ssc-soma psn)")
 if (args.proximal != 'fastest' or args.coupling != 'none') and (args.task.upper() != 'SSC' or args.ssc_soma != 'psn'):
     raise ValueError("--proximal/--coupling are only wired into ff_SSC (--task SSC --ssc-soma psn)")
+if args.dmpr_ablation != 'none' and (args.task.upper() != 'SSC' or args.ssc_soma != 'psn' or args.readout != 'trunk_distal'):
+    raise ValueError("--dmpr-ablation needs ff_SSC with DMPR (--task SSC --ssc-soma psn --readout trunk_distal)")
 paper_aligned_soma = (
     args.task.upper() == 'SSC' and args.ssc_soma in {'src', 'asrc'}
 )
@@ -777,6 +783,8 @@ if args.results_dir == '':
         readout_tag += f'-prox-{args.proximal}'
     if args.coupling != 'none':
         readout_tag += f'-coup-{args.coupling}'
+    if args.dmpr_ablation != 'none':
+        readout_tag += f'-abl-{args.dmpr_ablation}'
     args.results_dir = '/data3/hyx/NR-DN/exp/'+args.task+'ff'+readout_tag+'-' + datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
 
 Path(args.results_dir).mkdir(parents=True, exist_ok=True)
@@ -850,6 +858,7 @@ else:
             readout=args.readout, readout_act=args.readout_act,
             L=args.L, U=args.U, soma_kernel=args.soma_kernel,
             coupling=args.coupling, proximal=args.proximal,
+            dmpr_ablation=args.dmpr_ablation,
         ).to(gpu)
     else:
         model = ff_SSC_SRC_ASRC(

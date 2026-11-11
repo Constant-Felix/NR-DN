@@ -199,7 +199,9 @@ class BaseDendCompartment(base.MemoryModule, abc.ABC):
                 f"but get {self.step_mode} instead."
             )
 
-BRANCH_READOUT_MODES = ("trunk_distal", "linear", "linear_act", "glu", "swiglu", "mlp", "proximal")
+BRANCH_READOUT_MODES = ("trunk_distal", "linear", "linear_act", "glu", "swiglu", "mlp", "proximal", "dendsn")
+# Rebuttal R4-Q4 (Table R4-3): DMPR component ablations, only for "trunk_distal".
+DMPR_ABLATIONS = ("none", "no_gate", "no_tanh")
 READOUT_ACTIVATIONS = {
     "gelu": F.gelu,
     "tanh": torch.tanh,
@@ -237,6 +239,18 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
       ``readout_mlp_hidden``
     * ``"proximal"``:   R = s * z_0, i.e. DMPR with the modulation disabled
       (m = 0 in Eq. 10; rebuttal R2-Q2). Distal compartments are unused.
+    * ``"dendsn"``:     R = kappa * psi(||(z_hat - mu) / zeta||_2), the DendSN
+      branch aggregation (Huang et al., Eqs. 5 and 7; rebuttal R4-Q1) with
+      the Mexican hat psi(x) = (1 - x^2) exp(-x^2 / 2), per-compartment
+      translation mu, template dilation zeta > 0 and branch strength kappa.
+      z_hat is z with the same cross-channel RMS normalization DMPR applies
+      to its differences. Init: mu = 0, kappa = 1, zeta =
+      ``dendsn_dilation_init`` (default 2 sqrt(K), so ||z_hat|| / zeta ~ 0.5).
+
+    ``dmpr_ablation`` (only with ``"trunk_distal"``; rebuttal R4-Q4) removes
+    one DMPR component: ``"no_gate"`` sets p_k = 1 (alpha and theta are not
+    created), ``"no_tanh"`` replaces tanh(delta_hat_k) by delta_hat_k inside
+    the sum; the outer tanh is kept in both cases, so |m| <= 1.
 
     Every readout feeds the same somatic input I = output_scale * R
     + input_residual_scale * X (Eq. 11).
@@ -277,6 +291,8 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         free_window_order: Optional[int] = None,
         readout_activation: str = "gelu",
         readout_mlp_hidden: int = 2,
+        dmpr_ablation: str = "none",
+        dendsn_dilation_init: Optional[float] = None,
     ):
         super().__init__(v_rest, step_mode, store_v_seq)
         if channels is None:
@@ -301,6 +317,12 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
             raise ValueError(f"readout_activation must be one of {tuple(READOUT_ACTIVATIONS)}")
         if int(readout_mlp_hidden) <= 0:
             raise ValueError("readout_mlp_hidden must be positive")
+        if dmpr_ablation not in DMPR_ABLATIONS:
+            raise ValueError(f"dmpr_ablation must be one of {DMPR_ABLATIONS}")
+        if dmpr_ablation != "none" and branch_readout_mode != "trunk_distal":
+            raise ValueError("dmpr_ablation requires branch_readout_mode='trunk_distal'")
+        if dendsn_dilation_init is not None and dendsn_dilation_init <= 0:
+            raise ValueError("dendsn_dilation_init must be positive")
         if integration_backend not in {"gemm", "fft"}:
             raise ValueError("integration_backend must be 'gemm' or 'fft'")
         if tau_min <= 1.0 or tau_max <= 1.0:
@@ -341,6 +363,11 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         self.branch_readout_mode = branch_readout_mode
         self.readout_activation = readout_activation
         self.readout_mlp_hidden = int(readout_mlp_hidden)
+        self.dmpr_ablation = dmpr_ablation
+        self.dendsn_dilation_init = (
+            2.0 * math.sqrt(self.compartments_per_branch)
+            if dendsn_dilation_init is None else float(dendsn_dilation_init)
+        )
         self.store_branch_monitor = bool(store_branch_monitor)
 
         active_branch_index = self._make_active_branch_index(
@@ -383,8 +410,12 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         self.compartment_input_logits = nn.Parameter(torch.zeros(self.num_branches, self.compartments_per_branch))
         if self.branch_readout_mode == "trunk_distal":
             self.distal_mix_logits = nn.Parameter(torch.zeros(self.num_branches, self.distal_count))
-            self.distal_gate_alpha = nn.Parameter(torch.full((self.num_branches, self.distal_count), float(distal_gate_alpha_init)))
-            self.distal_gate_threshold = nn.Parameter(torch.full((self.num_branches, self.distal_count), float(distal_gate_threshold_init)))
+            if self.dmpr_ablation == "no_gate":
+                self.register_parameter("distal_gate_alpha", None)
+                self.register_parameter("distal_gate_threshold", None)
+            else:
+                self.distal_gate_alpha = nn.Parameter(torch.full((self.num_branches, self.distal_count), float(distal_gate_alpha_init)))
+                self.distal_gate_threshold = nn.Parameter(torch.full((self.num_branches, self.distal_count), float(distal_gate_threshold_init)))
             self.distal_gain = nn.Parameter(torch.full((self.num_branches,), float(distal_gain_init)))
             self.distal_residual_gain = nn.Parameter(torch.full((self.num_branches,), float(distal_residual_init)))
             self.branch_strength = nn.Parameter(torch.ones(self.num_branches))
@@ -425,6 +456,12 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
             self.readout_out_bias = uniform(B, fan_in=H)                # b2
         elif mode == "proximal":
             # same s_j (branch strength) and initialization as DMPR
+            self.branch_strength = nn.Parameter(torch.ones(B))
+        elif mode == "dendsn":
+            # DendSN: translation mu_k (xi_i in Huang et al.), dilation zeta = exp(.) > 0,
+            # branch strength kappa; K + 2 parameters per template
+            self.readout_translation = nn.Parameter(torch.zeros(B, K))
+            self.readout_log_dilation = nn.Parameter(torch.full((B,), math.log(self.dendsn_dilation_init)))
             self.branch_strength = nn.Parameter(torch.ones(B))
         else:
             raise ValueError(f"no readout parameters for mode {mode!r}")
@@ -899,7 +936,8 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         """W1 readouts (Table R1-1) on the raw compartment states.
 
         ``state`` is ``[M, d, C, K, *spatial]``; the result is ``[M, d, C, *spatial]``.
-        Unlike DMPR, no RMS normalization is applied to the states.
+        Unlike DMPR, no RMS normalization is applied to the states, except for
+        ``"dendsn"`` (Table R4-1), whose Mexican hat needs O(1) inputs.
         """
         dtype, device = state.dtype, state.device
         d, C = self.branch_degree, self.channels
@@ -936,6 +974,16 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         elif mode == "proximal":
             # DMPR with m = 0: R = s_j * z_0
             y = routed(self.branch_strength).view(1, d, C, *spatial) * state[:, :, :, 0, ...]
+        elif mode == "dendsn":
+            # kappa * psi(||(z_hat - mu) / zeta||_2); psi depends on x only through
+            # x^2 = sum_k ((z_hat_k - mu_k) / zeta)^2, so no sqrt (and no singular
+            # gradient at 0) is needed: psi = (1 - x^2) exp(-x^2 / 2)
+            z_hat = self._normalize_distal_delta(state)  # RMS over channels and positions
+            mu = routed(self.readout_translation).view(1, d, C, self.compartments_per_branch, *spatial)
+            zeta = routed(self.readout_log_dilation.exp()).view(1, d, C, 1, *spatial)
+            sq_norm = ((z_hat - mu) / zeta).square().sum(dim=3)
+            kappa = routed(self.branch_strength).view(1, d, C, *spatial)
+            y = kappa * (1.0 - sq_norm) * torch.exp(-0.5 * sq_norm)
         else:
             raise ValueError(f"unknown branch_readout_mode {mode!r}")
 
@@ -958,16 +1006,24 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
         delta = distal - trunk.unsqueeze(3)
         delta_norm = self._normalize_distal_delta(delta)
 
-        alpha = F.softplus(self._edge_branch_value(self.distal_gate_alpha).to(dtype=state.dtype, device=state.device))
-        threshold = self._edge_branch_value(self.distal_gate_threshold.abs()).to(dtype=state.dtype, device=state.device)
-        alpha = self._view_edge_distal(alpha, delta_norm)
-        threshold = self._view_edge_distal(threshold, delta_norm)
-        distal_gate = torch.sigmoid(alpha * delta_norm.abs() - threshold)
+        # Table R4-3: "no_tanh" uses delta_hat_k instead of tanh(delta_hat_k)
+        distal_drive = delta_norm if self.dmpr_ablation == "no_tanh" else torch.tanh(delta_norm)
+        if self.dmpr_ablation == "no_gate":
+            # Table R4-3: p_k = 1
+            distal_gate = None
+            gated_drive = distal_drive
+        else:
+            alpha = F.softplus(self._edge_branch_value(self.distal_gate_alpha).to(dtype=state.dtype, device=state.device))
+            threshold = self._edge_branch_value(self.distal_gate_threshold.abs()).to(dtype=state.dtype, device=state.device)
+            alpha = self._view_edge_distal(alpha, delta_norm)
+            threshold = self._view_edge_distal(threshold, delta_norm)
+            distal_gate = torch.sigmoid(alpha * delta_norm.abs() - threshold)
+            gated_drive = distal_gate * distal_drive
 
         mix = torch.softmax(self.distal_mix_logits, dim=-1)
         mix = self._edge_branch_value(mix.to(dtype=state.dtype, device=state.device))
         mix = self._view_edge_distal(mix, delta_norm)
-        branch_mod = (mix * distal_gate * torch.tanh(delta_norm)).sum(dim=3)
+        branch_mod = (mix * gated_drive).sum(dim=3)
         branch_mod = torch.tanh(branch_mod)
 
         distal_gain = self._edge_branch_value(self.distal_gain).to(dtype=state.dtype, device=state.device)
@@ -981,7 +1037,9 @@ class SparseChannelPreservingTrunkDistalDendCompartment(BaseDendCompartment):
 
         if self.store_branch_monitor:
             self._branch_mod_step = branch_mod.detach()
-            self._distal_gate_step = distal_gate.detach()
+            self._distal_gate_step = (
+                torch.ones_like(delta_norm) if distal_gate is None else distal_gate
+            ).detach()
             self._branch_output_step = y.detach()
         else:
             self._branch_mod_step = None

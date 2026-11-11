@@ -256,7 +256,7 @@ def dend_class(coupling):
 
 
 class CIFAR10Net(nn.Module):
-    def __init__(self, channels, class_num: int, T: int=32, P:int=-1,L=-4,thre=4,num_branches=8,compartments_per_branch=4,branch_degree=1,readout='trunk_distal',readout_act='gelu',soma_kernel='free',coupling='none',proximal='fastest'):
+    def __init__(self, channels, class_num: int, T: int=32, P:int=-1,L=-4,thre=4,num_branches=8,compartments_per_branch=4,branch_degree=1,readout='trunk_distal',readout_act='gelu',soma_kernel='free',coupling='none',proximal='fastest',dmpr_ablation='none'):
         super().__init__()
         dend_cls = dend_class(coupling)
         tau_scale = PROXIMAL_TAU_SCALE[proximal]
@@ -269,7 +269,7 @@ class CIFAR10Net(nn.Module):
                     in_channels = channels
                 conv.append(layer.Conv1d(in_channels, channels, kernel_size=3, padding=1, bias=False))
                 conv.append(layer.BatchNorm1d(channels))
-                conv.append(dend_cls(channels,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale))
+                conv.append(dend_cls(channels,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale,dmpr_ablation=dmpr_ablation))
                 conv.append(make_soma(soma_kernel, T//8, L, thre))
                 #conv.append(soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'))
 
@@ -281,7 +281,7 @@ class CIFAR10Net(nn.Module):
         self.fc = nn.Sequential(
             layer.Flatten(),
             layer.Linear(channels * 8, channels * 8 // 4),
-            dend_cls(channels * 2,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale),
+            dend_cls(channels * 2,num_branches=num_branches,compartments_per_branch=compartments_per_branch,c_sub=channels,branch_degree=branch_degree,learn_comp_gain=True,learn_edge_gain=True,integration_backend='fft',merge_norm='mean',branch_readout_mode=readout,readout_activation=readout_act,compartment_tau_scale=tau_scale,dmpr_ablation=dmpr_ablation),
             #soma.MaskedSlidingPSN(order=T,exp_init=True,backend='fft'),
             make_soma(soma_kernel, T//8, L, thre),
             layer.Linear(channels * 8 // 4, class_num),
@@ -337,6 +337,8 @@ def main():
     # Rebuttal W5 (Tables R1-6 / R1-7): proximal compartment and intra-branch coupling
     parser.add_argument('-proximal', default='fastest', choices=list(PROXIMAL_TAU_SCALE), help='which compartment (by initial tau) is proximal in each branch')
     parser.add_argument('-coupling', default='none', choices=list(COUPLINGS), help='none: diagonal A; chain: symmetric tridiagonal A')
+    # Rebuttal R4-Q4 (Table R4-3): remove one DMPR component (-readout trunk_distal only)
+    parser.add_argument('-dmpr-ablation', default='none', choices=list(dend_compartment.DMPR_ABLATIONS), help='no_gate: p_k = 1; no_tanh: delta_hat instead of tanh(delta_hat)')
     # Rebuttal analyses of a trained model (no training): R3-Q2 DMPR statistics, R2-W1 distal stimulation
     parser.add_argument('-dmpr-stats', type=str, default='', help='checkpoint (checkpoint_max.pth): learned gamma/rho and |m| statistics (Table R3-2)')
     parser.add_argument('-distal-stim', type=str, default='', help='checkpoint (checkpoint_max.pth): in-silico distal stimulation (Table R2-1)')
@@ -440,6 +442,8 @@ def main():
         out_dir += f'_prox-{args.proximal}'
     if args.coupling != 'none':
         out_dir += f'_coup-{args.coupling}'
+    if args.dmpr_ablation != 'none':
+        out_dir += f'_abl-{args.dmpr_ablation}'
 
 
 
@@ -455,7 +459,7 @@ def main():
         os.makedirs(pt_dir)
 
     #net = CIFAR10Net(channels=args.channels, neu=args.neu, T=32, class_num=args.class_num, P=args.P, exp_init=args.exp_init)
-    net = CIFAR10Net(channels=args.channels, class_num=args.class_num, readout=args.readout, readout_act=args.readout_act, L=args.L, thre=args.U, soma_kernel=args.soma_kernel, coupling=args.coupling, proximal=args.proximal)  ##
+    net = CIFAR10Net(channels=args.channels, class_num=args.class_num, readout=args.readout, readout_act=args.readout_act, L=args.L, thre=args.U, soma_kernel=args.soma_kernel, coupling=args.coupling, proximal=args.proximal, dmpr_ablation=args.dmpr_ablation)  ##
     net.to(args.device)
     n_parameters = sum(p.numel() for p in net.parameters() if p.requires_grad)
     print(f"number of params: {n_parameters}")
