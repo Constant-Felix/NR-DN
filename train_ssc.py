@@ -613,7 +613,7 @@ def evaluate_checkpoint(model, test_loader, args, gpu):
     return acc1, acc5, test_loss
 
 
-# python train_ssc.py --task SSC --device cuda:0 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1 --readout proximal        --epochs 400 --workers 16 --cos   --optim sgd    --lr 0.1
+# python train_ssc.py --task SSC --device cuda:4 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1 --eval-only --checkpoint exp/SSCff-2026-11-09-16-48-16/model_best.pth.tar --distal-stim      --epochs 400 --workers 16 --cos   --optim sgd    --lr 0.1
 # python train_ssc.py --task SSC --device cuda:6 --lr 0.005 --wd 5e-4 --cos --ssc-preprocess asrc --ssc-n-bins 1
 # python train_ssc.py --eval-only --checkpoint exp/SSCff-2026-11-09-16-48-16/model_best.pth.tar --task SSC --ssc-preprocess asrc --ssc-soma psn --ssc-n-bins 1 --device cuda:7 --dmpr-stats
 # python train_ssc.py --task SHD --device cuda:1 --lr 0.005 --data-root /data/hyx/ViT-dend/data/shd/data_shd --wd 5e-4 --cos

@@ -295,13 +295,13 @@ class CIFAR10Net(nn.Module):
         x_seq = self.fc(self.conv(x_seq))  # [W, N, C]
         return x_seq.mean(0)
 
-# python train_seq.py -data-dir /data2/hyx/ViT-dend/data/cifar100 -amp -class-num 100 -channels 128  -warmup-epochs 0  -epochs 400 -opt adamw -lr 0.001 -dmpr-stats exp/pt/None_e400_b128_adamw_lr0.001_c128_20261110-045305_amp_coup-chain_P32/checkpoint_max.pth -coupling chain   -resume logs/pt/None_e400_b128_adamw_lr0.001_c128_20261016-060357_amp_P32/checkpoint_latest.pth
+# python train_seq.py -data-dir /data2/hyx/ViT-dend/data/cifar10 -amp -class-num 10 -channels 128  -warmup-epochs 0  -epochs 400 -opt adamw -lr 0.001 -dmpr-stats exp/pt/None_e400_b128_adamw_lr0.001_c128_20261110-045305_amp_coup-chain_P32/checkpoint_max.pth -coupling chain   -resume logs/pt/None_e400_b128_adamw_lr0.001_c128_20261016-060357_amp_P32/checkpoint_latest.pth
 
 from datetime import datetime
 def main():
 
     parser = argparse.ArgumentParser(description='Classify Sequential CIFAR10/100')
-    parser.add_argument('-device', default='cuda:7', help='device')
+    parser.add_argument('-device', default='cuda:6', help='device')
     parser.add_argument('-b', default=128, type=int, help='batch size')
     parser.add_argument('-epochs', default=256, type=int, metavar='N',
                         help='number of total epochs to run')

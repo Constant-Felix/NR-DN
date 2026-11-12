@@ -1,5 +1,8 @@
 output/
 w3/
+w3/cifar_gelu.json
+w3/cifar_spsn.json
+w3/listops_gelu.json
 strip_linear_readout.py
 check_soma_equiv.py
 exp/
